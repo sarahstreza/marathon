@@ -5,8 +5,8 @@ video collection. You define **channels**, each a set of videos plus a rule
 for what plays next. Flip to a channel and it resumes where you left off; let
 it run and it keeps going.
 
-**Status:** early development. Milestones M0 (scaffold) and M1 (rules engine)
-are done; the server and desktop client are stubs. [`PLAN.md`](PLAN.md) has the design, API, and
+**Status:** early development. Milestones M0 (scaffold), M1 (rules engine),
+and M2 (server) are done; the desktop client is a stub. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -35,7 +35,7 @@ Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 
 ## Development
 
-Requires Rust stable (edition 2024). Every change must pass:
+Requires Rust stable (edition 2024, 1.94 or newer). Every change must pass:
 
 ```sh
 cargo fmt --all --check
@@ -44,6 +44,25 @@ cargo test --workspace
 ```
 
 CI runs these on Linux and macOS (`.github/workflows/ci.yml`).
+
+### Running the server
+
+```sh
+cargo run -p marathond -- --config path/to/config.toml
+```
+
+See [`config/example.toml`](config/example.toml) for the config format. The
+API is served under `/api/v1` (PLAN.md §8); its OpenAPI document is at
+`/api/v1/openapi.json`. The SQLite database lives in `data_dir`. Set
+`RUST_LOG=debug` for more logging.
+
+For example, against the test library below:
+
+```sh
+curl -s localhost:7878/api/v1/channels | jq
+curl -s localhost:7878/api/v1/channels/<id>/now | jq
+mpv http://localhost:7878/api/v1/stream/<item-id>
+```
 
 ### Test media
 
