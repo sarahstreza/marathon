@@ -1029,6 +1029,10 @@ dependencies = [
 [[package]]
 name = "marathon-mpv"
 version = "0.1.0"
+dependencies = [
+ "pkg-config",
+ "thiserror",
+]
 
 [[package]]
 name = "marathon-rules"

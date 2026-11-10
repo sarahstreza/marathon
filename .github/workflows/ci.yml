@@ -34,6 +34,13 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # marathon-mpv links the system libmpv, found with pkg-config.
+      - name: Install libmpv (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev
+      - name: Install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mpv pkgconf
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked

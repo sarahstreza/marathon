@@ -35,7 +35,16 @@ Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 
 ## Development
 
-Requires Rust stable (edition 2024, 1.94 or newer). Every change must pass:
+Requires Rust stable (edition 2024, 1.94 or newer) and libmpv with its
+headers and `pkg-config` file (client API 2.0+, i.e. mpv 0.35 or newer):
+
+| Platform | Package |
+|---|---|
+| Fedora (incl. a toolbox/distrobox on Silverblue, Bazzite, ...) | `sudo dnf install mpv-devel` |
+| Debian / Ubuntu | `sudo apt install libmpv-dev` |
+| macOS | `brew install mpv pkgconf` |
+
+Every change must pass:
 
 ```sh
 cargo fmt --all --check
