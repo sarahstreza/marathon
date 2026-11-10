@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. The allowed edges between these are enforced by
+# apps/marathond/tests/dependency_graph.rs (see PLAN.md §4).
+marathon-api = { path = "crates/marathon-api" }
+marathon-rules = { path = "crates/marathon-rules" }
+marathon-server = { path = "crates/marathon-server" }
+marathon-client = { path = "crates/marathon-client" }
+marathon-mpv = { path = "crates/marathon-mpv" }
+
+# External crates.
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+toml = "1.2.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"

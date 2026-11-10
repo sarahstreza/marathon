@@ -1,0 +1,12 @@
+[package]
+name = "marathon-api"
+description = "Marathon HTTP API types shared by server and clients"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
