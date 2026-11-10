@@ -9,12 +9,12 @@ it run and it keeps going.
 desktop client are stubs. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
-> **AI-generated project.** The code, tests, scripts, and documentation in
-> this repository are written by AI (Anthropic's Claude, via Claude Code),
-> working from the project plan (`PLAN.md`) under human direction. A
-> human checks the parts that need eyes on a screen, as listed in each
-> milestone's `[manual]` criteria. Commits made by the AI carry a
-> `Co-Authored-By: Claude` trailer.
+> **AI-generated project.** Everything in this repository, including the
+> plan (`PLAN.md`) and agent instructions (`CLAUDE.md`), is written by AI
+> (Anthropic's Claude) under human direction. The code, tests, and scripts
+> are written with Claude Code. A human checks the parts that need eyes on
+> a screen, as listed in each milestone's `[manual]` criteria. Commits made
+> by the AI carry a `Co-Authored-By: Claude` trailer.
 
 ## Layout
 
