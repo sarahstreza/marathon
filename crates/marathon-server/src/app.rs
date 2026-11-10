@@ -106,6 +106,19 @@ impl App {
         let _guard = self.inner.scanning.lock().await;
         catalog::rescan(&self.inner.db, &self.inner.config).await
     }
+
+    /// The root directory of a configured filesystem source, with `~`
+    /// expanded.
+    pub(crate) fn source_root(&self, source_id: &str) -> Option<PathBuf> {
+        self.inner
+            .config
+            .sources
+            .iter()
+            .find(|s| s.id() == source_id)
+            .map(|s| match s {
+                SourceConfig::Filesystem { root, .. } => expand_home(root),
+            })
+    }
 }
 
 /// Mirrors config's sources and channels into the database. Channel state is
