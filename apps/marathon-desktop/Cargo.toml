@@ -11,9 +11,23 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+marathon-api.workspace = true
 marathon-client.workspace = true
 marathon-mpv.workspace = true
+# Not used until embedded mode (M4); kept so the dependency graph matches
+# PLAN.md §4.
 marathon-server.workspace = true
 anyhow.workspace = true
+clap.workspace = true
+dirs.workspace = true
+glow.workspace = true
+glutin.workspace = true
+glutin-winit.workspace = true
+raw-window-handle.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+winit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

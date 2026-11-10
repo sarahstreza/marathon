@@ -21,11 +21,19 @@ marathon-mpv = { path = "crates/marathon-mpv" }
 # External crates.
 anyhow = "1.0.104"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+dirs = "7.0.0"
+# Windowing and GL. egui (the M5 overlay) pins these: egui-winit/egui_glow
+# 0.37 need winit ^0.30.13 and glow ^0.17, and glutin-winit 0.5 pairs
+# glutin 0.32 with winit 0.30. Upgrade them together, egui first.
+glow = "0.17.0"
+glutin = "0.32.3"
+glutin-winit = "0.5.0"
 http-body-util = "0.1.5"
 oas3 = "0.22.0"
 pkg-config = "0.3.34"
 proptest = "1.12.0"
+raw-window-handle = "0.6.2"
 regex = "1.13.1"
 # Blocking client for the desktop tuner thread; rustls so no system OpenSSL.
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls"] }
@@ -42,6 +50,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 utoipa = "6.0.0"
 uuid = { version = "1.29.2", features = ["v4", "v7"] }
+winit = "0.30.13"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
