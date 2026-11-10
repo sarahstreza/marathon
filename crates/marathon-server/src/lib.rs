@@ -3,5 +3,6 @@
 //! embedded mode.
 
 pub mod config;
+pub mod db;
 pub mod parse;
 pub mod scan;
