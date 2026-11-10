@@ -1,1 +1,8 @@
 /target/
+
+# Generated test media (scripts/make-test-library.sh). Never commit media.
+/test-library/
+*.mkv
+*.mp4
+*.webm
+*.srt
