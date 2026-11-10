@@ -1,13 +1,24 @@
 //! Pure programming-rules engine for Marathon channels.
 //!
-//! A rule decides which item a channel plays next. This crate must stay pure:
-//! no I/O, no clocks, no global RNG, and no dependencies on other Marathon
-//! crates. Randomness (added with the engine in M1) comes from a seed stored in
-//! the cursor.
+//! A rule decides which item a channel plays next. The entry points are
+//! [`next`] and [`previous`], which take a [`Rule`], the channel's items as
+//! [`ItemKey`]s, and a [`Cursor`], and return a [`Step`]: the item to play
+//! and the cursor to store.
+//!
+//! This crate must stay pure: no I/O, no clocks, no global RNG, and no
+//! dependencies on other Marathon crates. Randomness comes from a seed stored
+//! in the cursor (see [`Cursor::seeded`]), so the same inputs always give the
+//! same sequence.
 
+mod bag;
+mod catalog;
+mod engine;
+mod grouped;
 mod item;
 mod natural;
+mod rng;
 
+pub use engine::{Cursor, Step, next, previous};
 pub use item::ItemKey;
 
 use serde::{Deserialize, Serialize};
