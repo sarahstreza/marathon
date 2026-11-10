@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  check:
+    name: build, clippy, test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple Silicon.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  test-library:
+    name: test library script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+      - name: Generate library inside the repo
+        run: scripts/make-test-library.sh test-library
+      - name: Check layout
+        run: |
+          set -euo pipefail
+          cd test-library
+          for s in 1 2 3; do
+            n=$(find "TV/Test Show/Season $s" -name 'Test Show - S0*E0* - *.mkv' | wc -l)
+            [ "$n" -eq 4 ] || { echo "Season $s has $n episodes, want 4"; exit 1; }
+          done
+          [ -f "TV/Test Show/Season 1/Test Show - S01E01 - Pilot.en.srt" ]
+          n=$(find Essays -type f | wc -l)
+          [ "$n" -eq 6 ] || { echo "Essays has $n clips, want 6"; exit 1; }
+          [ -f "Misc/Café Society's Ünïcode Clip — Ørsted.mkv" ]
+      - name: Generated media is ignored by git
+        run: |
+          status=$(git status --porcelain --untracked-files=all)
+          if [ -n "$status" ]; then
+            echo "Generated files are not ignored:"; echo "$status"; exit 1
+          fi
