@@ -10,8 +10,12 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# Keep this list minimal: the crate must stay pure (no I/O, clocks, or RNG
+# crates). apps/marathond/tests/dependency_graph.rs enforces it.
 [dependencies]
 serde.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
 toml.workspace = true
