@@ -3,6 +3,8 @@
 //! maps to.
 
 mod action;
+pub mod api;
+pub mod client_id;
 pub mod keyboard;
 
 pub use action::Action;
