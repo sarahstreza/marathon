@@ -103,3 +103,47 @@ fn internal_dependencies_follow_the_plan() {
         "disallowed internal dependencies (see PLAN.md §4): {violations:?}"
     );
 }
+
+/// `marathon-rules` must stay pure (PLAN.md §6, M1): no I/O, clocks, or RNG.
+/// Its non-dev dependencies are therefore pinned to this reviewed list;
+/// adding one should be a deliberate change to this test.
+const RULES_ALLOWED_DEPS: &[&str] = &["serde"];
+
+#[test]
+fn rules_crate_has_only_pure_dependencies() {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+    let output = Command::new(cargo)
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .output()
+        .expect("failed to run cargo metadata");
+    assert!(output.status.success());
+    let metadata: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rules = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "marathon-rules")
+        .expect("marathon-rules is a workspace member");
+    let deps: BTreeSet<&str> = rules["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        // `kind` is null for normal dependencies, "dev" or "build" otherwise.
+        .filter(|d| d["kind"].as_str() != Some("dev"))
+        .map(|d| d["name"].as_str().unwrap())
+        .collect();
+    let allowed: BTreeSet<&str> = RULES_ALLOWED_DEPS.iter().copied().collect();
+    assert_eq!(
+        deps, allowed,
+        "marathon-rules dependencies changed; it must stay free of I/O, time, and RNG"
+    );
+}

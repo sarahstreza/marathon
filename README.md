@@ -5,8 +5,8 @@ video collection. You define **channels**, each a set of videos plus a rule
 for what plays next. Flip to a channel and it resumes where you left off; let
 it run and it keeps going.
 
-**Status:** early development. Milestone M0 (scaffold) is done; the server and
-desktop client are stubs. [`PLAN.md`](PLAN.md) has the design, API, and
+**Status:** early development. Milestones M0 (scaffold) and M1 (rules engine)
+are done; the server and desktop client are stubs. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
