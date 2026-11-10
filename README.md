@@ -6,7 +6,8 @@ for what plays next. Flip to a channel and it resumes where you left off; let
 it run and it keeps going.
 
 **Status:** early development. Milestones M0 (scaffold), M1 (rules engine),
-and M2 (server) are done; the desktop client is a stub. [`PLAN.md`](PLAN.md) has the design, API, and
+and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
+overlay) is implemented and awaiting its manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -73,15 +74,48 @@ curl -s localhost:7878/api/v1/channels/<id>/now | jq
 mpv http://localhost:7878/api/v1/stream/<item-id>
 ```
 
+### Running the desktop client
+
+With a server running:
+
+```sh
+cargo run -p marathon-desktop -- --windowed
+```
+
+`--server URL` (or `MARATHON_SERVER`) points it at a server other than
+`http://127.0.0.1:7878`, `--token` (or `MARATHON_TOKEN`) supplies a bearer
+token, and `--channel N` picks the starting channel; by default it resumes
+the channel this client watched last. Without `--windowed` it starts
+fullscreen. There is no on-screen UI yet: channel changes and `I`/`G`
+output go to the log. Set `RUST_LOG=info,mpv=debug` to see mpv's own log.
+
+| Key | Does |
+|---|---|
+| PgUp / PgDn, Up / Down | Channel up / down |
+| digits, then Enter or a pause | Go to channel number |
+| Space | Pause / resume |
+| Left / Right | Seek −10s / +10s |
+| N / P | Next / previous item |
+| S | Cycle subtitles (on/off with one track) |
+| F | Toggle fullscreen |
+| I / G | Log what is playing / the channel list |
+| Q | Quit (saves the position) |
+
+The client stores only a random client ID, in `marathon/client-id` under
+the user's config directory (`~/.config` on Linux).
+
 ### Test media
 
 ```sh
 scripts/make-test-library.sh test-library
 ```
 
-needs ffmpeg built with the `drawtext` filter. It writes about two minutes
-of labelled test-pattern clips: a three-season show, loosely named "essays",
-a sidecar subtitle, and an awkward unicode filename. Each frame shows the
+needs ffmpeg built with the `drawtext` filter. It writes labelled
+test-pattern clips: a three-season show, loosely named "essays", a sidecar
+subtitle, and an awkward unicode filename. Clips are 6s long by default;
+set `DURATION=<seconds>` for longer ones. Clips under 30s count as finished
+as soon as they have started (PLAN.md §1), so checking that channels resume
+needs e.g. `DURATION=120`. Each frame shows the
 clip's filename and timestamp. Generated media is git-ignored; never commit
 it.
 

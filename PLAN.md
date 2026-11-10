@@ -100,7 +100,7 @@ Get these right before anything else; every component depends on them.
 | Logging | `tracing`, `tracing-subscriber` | |
 | Errors | `thiserror` in libraries, `anyhow` in binaries | |
 | Windowing / GL | `winit` + `glutin` + `glow` | One window, one GL context |
-| Video | libmpv, OpenGL render API | `libmpv2` crate if it supports the render API cleanly at current versions; otherwise thin `bindgen` bindings in `marathon-mpv` (the needed surface is small) |
+| Video | libmpv, OpenGL render API | Thin hand-written bindings in `marathon-mpv`, linked via `pkg-config` (chosen over `libmpv2` in M3; see §12) |
 | Overlay UI | `egui` via `egui_glow` | Drawn over the video each frame; isolated behind a module so it can be replaced |
 | Gamepad | `gilrs` | |
 | Testing | `proptest`, `tempfile`, `tokio::test` | |
@@ -322,12 +322,15 @@ behavior:
 
 ```
 ChannelUp, ChannelDown, GoToChannel(u32), TogglePause, SeekRelative(i32),
-NextItem, PreviousItem, ShowInfo, ToggleGuide, Back, Quit
+NextItem, PreviousItem, ShowInfo, ToggleGuide, Back, ToggleSubtitles,
+ToggleFullscreen, Quit
 ```
 
 MVP bindings — keyboard: PgUp/PgDn or Up/Down for channels, digits for direct
-entry, Space pause, Left/Right seek ±10s, N/P next/previous item, I info,
-G guide, Esc back, Q quit. Gamepad: shoulders change channel, A info/select,
+entry (committed on Enter or after 1.5s), Space pause, Left/Right seek ±10s,
+N/P next/previous item, I info, G guide, S subtitles, F fullscreen, Esc back,
+Q quit. (`ToggleSubtitles` and `ToggleFullscreen` were added in M3 for its
+subtitle and fullscreen checks.) Gamepad: shoulders change channel, A info/select,
 B back, Start pause, D-pad navigates the guide.
 
 ### Overlay UI (MVP)
@@ -606,7 +609,7 @@ from phones. No Windows build (keep code portable, but do not test it yet).
 | Decision | Default | Revisit when |
 |---|---|---|
 | Overlay UI toolkit | egui | If the 10-foot look needs more than egui gives easily; the overlay is isolated so it can be swapped for a custom GL renderer or another toolkit |
-| libmpv bindings | `libmpv2` crate if suitable, else own `bindgen` | M3 start |
+| libmpv bindings | Decided in M3: hand-written declarations in `marathon-mpv` (no `bindgen`, so no libclang). `libmpv2` was LGPL-2.1, panicked inside FFI callbacks, and allocated per frame; the needed surface is ~20 functions | If the needed surface grows a lot |
 | Progress report interval | 5s | If DB growth matters |
 | Finished threshold | `max(30s, 2%)` from end | After living with it; credits vary |
 | Resume rewind | 5s | Personal taste |
