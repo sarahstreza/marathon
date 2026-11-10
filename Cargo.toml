@@ -20,6 +20,7 @@ marathon-mpv = { path = "crates/marathon-mpv" }
 # External crates.
 anyhow = "1.0.104"
 serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
 toml = "1.2.1"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

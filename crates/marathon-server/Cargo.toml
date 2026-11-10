@@ -13,3 +13,6 @@ workspace = true
 [dependencies]
 marathon-api.workspace = true
 marathon-rules.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true

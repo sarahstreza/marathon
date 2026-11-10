@@ -1,0 +1,42 @@
+# Example Marathon configuration. See PLAN.md §5.
+#
+# Config is authoritative for source and channel definitions; playback state
+# lives in the SQLite database under `data_dir`.
+
+[server]
+bind = "127.0.0.1:7878"
+data_dir = "~/.local/share/marathon"   # SQLite lives here
+# token = "change-me"                  # required if bind is not loopback
+
+# A filesystem source. Mounted SMB/NFS shares work as ordinary paths.
+[[source]]
+id = "nas"
+kind = "filesystem"
+root = "/mnt/nas/video"
+
+# Plays episodes in season/episode order, looping at the end.
+[[channel]]
+id = "office"
+number = 1
+name = "The Office"
+items = [{ source = "nas", path = "TV/The Office (US)" }]
+rule = { kind = "ordered" }
+
+# Picks seasons in random order, playing each season's episodes in order.
+[[channel]]
+id = "taskmaster"
+number = 6
+name = "Taskmaster"
+items = [{ source = "nas", path = "TV/Taskmaster" }]
+rule = { kind = "grouped", by = "season", groups = "shuffled", within = "ordered" }
+
+# Bag shuffle across two folders (and their subfolders).
+[[channel]]
+id = "essays"
+number = 3
+name = "Game Design Essays"
+items = [
+  { source = "nas", path = "YouTube/Game Design", recursive = true },
+  { source = "nas", path = "YouTube/Level Design", recursive = true },
+]
+rule = { kind = "shuffled" }
