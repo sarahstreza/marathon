@@ -5,6 +5,11 @@
 //! crates. Randomness (added with the engine in M1) comes from a seed stored in
 //! the cursor.
 
+mod item;
+mod natural;
+
+pub use item::ItemKey;
+
 use serde::{Deserialize, Serialize};
 
 /// A channel's programming rule, as written in config and stored in the
