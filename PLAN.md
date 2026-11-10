@@ -350,54 +350,238 @@ B back, Start pause, D-pad navigates the guide.
 
 ## 10. Milestones
 
-Each milestone ends with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-and `cargo test --workspace` passing.
+Work the milestones in order. A milestone is complete only when **every**
+criterion below it is met. Criteria are tagged:
 
-**M0 — Scaffold.** Workspace, empty crates, CI (GitHub Actions on Linux and
-macOS), `config/example.toml`, and `scripts/make-test-library.sh`, which uses
-ffmpeg's `testsrc` to generate a small fake library: a 3-season show with
-`SxxExx` names, a folder of loose "essays", one file with a sidecar `.srt`.
-Clips should be a few seconds long with the filename burned into the frame.
+- **[auto]** — verified by a test or command that runs in CI.
+- **[manual]** — needs a human to run the app and look. Claude Code should list
+  these at the end of the milestone with exact steps to check, and must not
+  mark them done itself.
 
-**M1 — Rules engine.** `marathon-rules` with `ordered`, `shuffled`, `grouped`,
-`next`/`previous`, serializable cursors, and the property tests in §6.
-*Done when:* all property tests pass; no I/O in the crate.
+Every milestone also inherits these baseline criteria:
 
-**M2 — Server.** Config loading, filesystem source and scanner, filename parsing,
-sidecar subtitle detection, SQLite schema and migrations, the API in §8, and
-range streaming. `marathond --config ...`.
-*Done when:* integration tests run against a temp library; and manually,
-`mpv http://127.0.0.1:7878/api/v1/stream/<id>` plays and seeks, and repeated
-`advance` calls walk a channel in the order its rule dictates.
+- [auto] `cargo fmt --all --check` passes.
+- [auto] `cargo clippy --workspace --all-targets -- -D warnings` passes.
+- [auto] `cargo test --workspace` passes.
+- [auto] CI is green on every platform it covers at that milestone.
+- No `TODO`s left in code without a matching entry in `docs/TODO.md` or an issue.
 
-**M3 — Desktop client, minimal.** `marathon-mpv` wrapper, window + GL + mpv
-render API, Tuner state machine, keyboard input. No overlay yet; log channel
-changes to the console.
-*Done when:* channel up/down switches channels, each channel resumes where it
-was left, episodes advance automatically at end of file, and quitting and
-relaunching resumes correctly.
+---
 
-**M4 — Embedded mode.** `--embedded` flag as in §9.
-*Done when:* M3's acceptance holds with no separately running server.
+### M0 — Scaffold
 
-**M5 — Overlay and gamepad.** egui overlay with banner and guide, eased fades,
-cursor hiding, `gilrs` input.
-*Done when:* fades are visibly smooth on a high-refresh display, idle CPU stays
-low while video plays with no overlay showing, and a controller can do
-everything the keyboard can.
+Workspace, empty crates, CI (GitHub Actions on Linux and macOS),
+`config/example.toml`, and `scripts/make-test-library.sh`, which uses ffmpeg's
+`testsrc` to generate a small fake library. Clips are a few seconds long with
+the filename burned into the frame.
 
-**M6 — Jellyfin source.** Catalog from the Jellyfin API (shows, seasons,
-episodes, durations); server proxies streams with `Range` pass-through.
-*Done when:* a channel built from a Jellyfin library behaves identically to a
-filesystem one.
+**Complete when:**
+- [auto] All crates and apps from §4 exist and `cargo build --workspace` succeeds
+  on Linux and macOS in CI.
+- [auto] The internal dependency graph matches §4 (no crate depends on one it
+  shouldn't; `marathon-rules` and `marathon-api` have no internal deps).
+- [auto] `config/example.toml` parses into the config types (a test loads it).
+- [manual] `scripts/make-test-library.sh <dir>` produces: a show with 3 seasons
+  of 4 episodes each named `Show Name - SxxExx - Title.mkv` inside
+  `Season N` folders; a folder of 6 loosely named "essay" clips; one episode
+  with a sidecar `.en.srt`; and one clip whose name contains spaces, unicode,
+  and an apostrophe.
+- [manual] Each generated clip plays in plain `mpv` and shows its own filename
+  on screen.
+- [auto] Generated media is ignored by `.gitignore`.
 
-**M7 — macOS.** Build and run the desktop client on macOS with Homebrew libmpv;
-fix main-thread and HiDPI issues; produce an app bundle.
+### M1 — Rules engine
 
-**M8 — Android client.** Separate planning doc. Kotlin + Jetpack Compose
-(Compose for TV for the 10-foot UI), libmpv from the mpv-android build, API
-client generated from `openapi.json`. Ports the Tuner state machine (small by
-design).
+`marathon-rules` with `ordered`, `shuffled`, `grouped`, `next`/`previous`,
+and serializable cursors.
+
+**Complete when:**
+- [auto] `ordered`: walks items in season/episode order, then loops to the
+  first item.
+- [auto] `shuffled` (property test): over any item set of size 0–200, every item
+  appears exactly once per cycle; the last item of a cycle is never the first
+  of the next (for sets of 2+).
+- [auto] `grouped` (property test): groups never interleave; within-group order
+  matches `within`; every group plays once before any group repeats when
+  `groups = "shuffled"`.
+- [auto] Same seed and same inputs produce the same sequence (determinism test).
+- [auto] Cursors round-trip through JSON, and resuming from a deserialized cursor
+  continues the identical sequence.
+- [auto] Rescan tolerance: removing the current item advances to a valid item
+  without panicking; adding items includes them no later than the next cycle;
+  an unchanged item set leaves the sequence unchanged.
+- [auto] `previous` after `next` returns the prior item for every rule.
+- [auto] Edge cases: 0 items returns `None`/empty step without panicking; 1 item
+  repeats itself.
+- [auto] The crate has no dependencies on I/O, time, or global RNG (enforced by
+  its `Cargo.toml` dependency list; review in PR).
+
+### M2 — Server
+
+Config loading, filesystem source and scanner, filename parsing, sidecar
+subtitle detection, SQLite schema and migrations, the API in §8, and range
+streaming. Binary: `marathond --config ...`.
+
+**Complete when:**
+- [auto] Filename parser unit tests cover `S01E02`, `s1e2`, `1x02`, `Season N`
+  folders, and fallback to natural sort (`Ep 2` sorts before `Ep 10`).
+- [auto] Scanner integration test against a temp library: the right number of
+  items is created with correct show/season/episode; sidecar subtitles are
+  attached to their video; a deleted file is marked `missing`, not removed; a
+  restored file is unmarked.
+- [auto] Migrations run cleanly on an empty database and are idempotent on
+  restart.
+- [auto] Config channels are upserted on startup; editing a channel's rule in
+  config and restarting changes the rule but preserves `channel_state`.
+- [auto] Every route in §8 has at least one integration test (via
+  `tower::ServiceExt::oneshot` or a real bound port).
+- [auto] `GET /stream/{id}` returns `200` with full body, `206` with correct
+  `Content-Range` for a range request, and `416` for an unsatisfiable range.
+- [auto] `advance` idempotency: two calls with the same `from_item_id` advance
+  the channel exactly once.
+- [auto] `progress` updates `channel_state` and appends an event; `history`
+  returns events newest first.
+- [auto] With a token configured, requests without it get `401`; with
+  `bind = 127.0.0.1` and no token, requests succeed. Startup fails with a clear
+  error if bind is non-loopback and no token is set.
+- [auto] `GET /openapi.json` returns a valid OpenAPI 3 document covering every
+  route.
+- [manual] `mpv http://127.0.0.1:7878/api/v1/stream/<id>` plays from the test
+  library, and seeking forward and backward works without stalls.
+- [manual] Calling `advance` repeatedly with `curl` walks each test channel in
+  the order its rule dictates.
+
+### M3 — Desktop client, minimal
+
+`marathon-mpv` wrapper, window + GL + mpv render API, Tuner state machine,
+keyboard input. No overlay; channel changes are logged to the console.
+
+**Complete when:**
+- [auto] Tuner state machine tests against a mock `Player` cover: tune →
+  play at saved position minus rewind; end of file → `advance` → next item;
+  channel switch reports progress before tuning away; progress reported on the
+  5s interval, on pause, and on quit.
+- [auto] A tune-in where the saved position is within the finished threshold
+  advances instead of resuming.
+- [auto] `Action` mapping test: every keyboard binding in §9 produces the
+  expected `Action`.
+- [manual] Channel up/down switches channels; each channel resumes within a
+  few seconds of where it was left.
+- [manual] An episode reaching its end advances to the next item with no user
+  input, and the gap between items is under ~1 second on local files.
+- [manual] Quit, relaunch, and the last-watched channel resumes at the right
+  item and position.
+- [manual] An episode with a sidecar `.srt` shows subtitles; toggling
+  subtitles works.
+- [manual] Pause, seek ±10s, next item, and previous item all behave as
+  described in §9.
+- [manual] Window resize and fullscreen toggling don't corrupt or stretch the
+  video.
+- [manual] Hardware decode is active on the dev machine (confirm via mpv's
+  `hwdec-current` property in the log).
+
+### M4 — Embedded mode
+
+`marathon-desktop --embedded --config <path>` runs the server in-process.
+
+**Complete when:**
+- [auto] An integration test starts the embedded server, resolves its
+  OS-assigned port, and makes a successful API call.
+- [auto] Embedded server binds only to `127.0.0.1`.
+- [manual] Every M3 manual criterion passes with no separate `marathond`
+  running.
+- [manual] Quitting the app shuts the embedded server down cleanly (no orphan
+  process, no lingering port, SQLite not left locked).
+- [manual] `--server http://host:7878` still works against a standalone
+  `marathond`, and the two modes share no state unless pointed at the same
+  `data_dir`.
+
+### M5 — Overlay and gamepad
+
+egui overlay with channel banner and guide, eased fades, cursor hiding,
+`gilrs` input.
+
+**Complete when:**
+- [auto] `Action` mapping test covers every gamepad binding in §9.
+- [auto] Fade timing logic (opacity as a function of elapsed time) is unit
+  tested independent of rendering.
+- [manual] The channel banner appears the instant a switch begins, before the
+  new video loads, and shows number, channel name, item title, and progress.
+- [manual] Fades are visibly smooth at the display's full refresh rate
+  (check on a 120Hz+ display) with no hitching while video plays underneath.
+- [manual] Video playback does not stutter or drop frames while the overlay
+  animates (check mpv's dropped-frame count in the log).
+- [manual] With video playing and no overlay visible, the app's CPU usage is
+  close to plain `mpv` playing the same file (the UI is not redrawing
+  needlessly).
+- [manual] The guide lists every channel with its current item, and selecting
+  one tunes to it.
+- [manual] A controller can perform every action the keyboard can; plugging
+  and unplugging the controller mid-session works without restart.
+- [manual] The mouse cursor hides after inactivity and reappears on movement.
+
+### M6 — Jellyfin source
+
+Catalog from the Jellyfin API (shows, seasons, episodes, durations); the
+server proxies streams with `Range` pass-through.
+
+**Complete when:**
+- [auto] Jellyfin client tests run against recorded or mocked API responses
+  (no live server required in CI).
+- [auto] Proxied streams return correct `206`/`Content-Range` responses for
+  range requests, verified against a mock upstream.
+- [auto] Durations from Jellyfin populate `items.duration_ms` without waiting
+  for a client report.
+- [auto] Jellyfin credentials come from config and never appear in logs or API
+  responses.
+- [manual] A channel built from a real Jellyfin library plays, seeks, resumes,
+  and advances exactly like a filesystem channel.
+- [manual] Jellyfin being unreachable produces a clear error in the client
+  rather than a hang, and filesystem channels keep working.
+- [manual] Rescanning picks up episodes added in Jellyfin.
+
+### M7 — macOS
+
+Desktop client builds and runs on macOS against Homebrew libmpv.
+
+**Complete when:**
+- [auto] CI builds and tests the workspace on macOS (Apple Silicon runner).
+- [auto] A script produces a `.app` bundle with libmpv and its dependencies
+  bundled and their paths rewritten, so it runs on a Mac without Homebrew.
+- [manual] Every M3, M4, and M5 manual criterion passes on macOS.
+- [manual] HiDPI: video and overlay render at native resolution on a Retina
+  display, not upscaled or quarter-sized.
+- [manual] Fullscreen uses native macOS fullscreen and behaves correctly
+  across Spaces and a second display.
+- [manual] Hardware decode is active (VideoToolbox, confirmed via
+  `hwdec-current`).
+- [manual] The bundle launches from Finder (after the usual unsigned-app
+  approval) with no terminal.
+
+### M8 — Android client
+
+Kotlin + Jetpack Compose (Compose for TV for the 10-foot UI), libmpv from the
+mpv-android build, API client generated from `openapi.json`. Gets its own
+planning doc before implementation starts.
+
+**Complete when:**
+- [auto] The Kotlin API client is generated from the server's `openapi.json` by
+  a script, and regenerating it after a server change is one command.
+- [auto] The ported Tuner state machine passes the same scenarios as the Rust
+  version (tune, resume rewind, advance on end, report-before-switch, finished
+  threshold).
+- [auto] A Gradle build produces an installable APK in CI.
+- [manual] On an Android TV device, a remote's D-pad and channel buttons drive
+  every action in §9.
+- [manual] On an Android phone, touch controls provide the same actions.
+- [manual] Channel switching, resume, and auto-advance pass the M3 manual
+  criteria against a networked `marathond`.
+- [manual] A file Android's native player can't decode (e.g. 10-bit HEVC with
+  PGS subtitles) plays correctly with subtitles.
+- [manual] Watching a channel on desktop, then tuning to it on Android, resumes
+  at the same item and position (and vice versa).
+- [manual] Backgrounding the app pauses playback and reports progress; returning
+  resumes.
 
 ### After the MVP (not now)
 
