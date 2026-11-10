@@ -56,7 +56,7 @@ API is served under `/api/v1` (PLAN.md §8); its OpenAPI document is at
 `/api/v1/openapi.json`. The SQLite database lives in `data_dir`. Set
 `RUST_LOG=debug` for more logging.
 
-For example, against the test library below:
+For example, against the test library (see [Test media](#test-media)):
 
 ```sh
 curl -s localhost:7878/api/v1/channels | jq
@@ -75,6 +75,16 @@ of labelled test-pattern clips: a three-season show, loosely named "essays",
 a sidecar subtitle, and an awkward unicode filename. Each frame shows the
 clip's filename and timestamp. Generated media is git-ignored; never commit
 it.
+
+It also writes `test-library/marathon.toml`, a config with one channel per
+programming rule over that library, so serving it is one command:
+
+```sh
+cargo run -p marathond -- --config test-library/marathon.toml
+```
+
+The server's database goes in `test-library/.marathon/`; delete that
+directory to reset every channel to its start.
 
 ## License
 

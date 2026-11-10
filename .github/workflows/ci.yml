@@ -59,6 +59,7 @@ jobs:
           n=$(find Essays -type f | wc -l)
           [ "$n" -eq 6 ] || { echo "Essays has $n clips, want 6"; exit 1; }
           [ -f "Misc/Café Society's Ünïcode Clip — Ørsted.mkv" ]
+          grep -qF "root = \"$PWD\"" marathon.toml
       - name: Generated media is ignored by git
         run: |
           status=$(git status --porcelain --untracked-files=all)
