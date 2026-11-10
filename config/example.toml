@@ -14,6 +14,11 @@ id = "nas"
 kind = "filesystem"
 root = "/mnt/nas/video"
 
+# Channel `items` select files from a source. A `path` naming a folder picks
+# up the videos directly in it plus those in its `Season N` subfolders, so a
+# show laid out as `Show/Season 1/...` needs no `recursive`. Add
+# `recursive = true` to include every subfolder at any depth.
+
 # Plays episodes in season/episode order, looping at the end.
 [[channel]]
 id = "office"

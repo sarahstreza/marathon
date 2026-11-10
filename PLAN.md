@@ -267,7 +267,7 @@ via `http-header-fields`).
 | GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch |
 | POST | `/channels/{id}/progress` | `{item_id, position_ms, duration_ms?, paused}` |
 | POST | `/channels/{id}/advance` | `{from_item_id, reason: "ended" \| "skipped"}` → new `now`. **Idempotent:** if `from_item_id` is not the channel's current item, return the current `now` without advancing |
-| POST | `/channels/{id}/previous` | Step back via the rule's `previous` |
+| POST | `/channels/{id}/previous` | `{from_item_id}` → new `now`. Step back via the rule's `previous`; idempotent like `advance` |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
