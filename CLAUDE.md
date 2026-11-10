@@ -16,6 +16,9 @@ until the current one meets its "done when" criteria.
 - Before adding a dependency, check its current version and maintenance status.
   `egui`, `egui_glow`, `winit`, and `glutin` versions must be mutually
   compatible; pick `egui` first and follow its pins.
+- When committing, split commits up into atomic, bisectable, and human-reviewable
+  commits. Always assume a human needs to read and understand your work and may
+  not have all context. Ensure things are adequately documented.
 
 ## Definition of done (every change)
 
