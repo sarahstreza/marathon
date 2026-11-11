@@ -66,6 +66,9 @@ jobs:
         working-directory: android
     steps:
       - uses: actions/checkout@v7
+      - name: Tuner scenarios match the Rust tests
+        working-directory: .
+        run: scripts/check-tuner-parity.sh
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
