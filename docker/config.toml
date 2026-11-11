@@ -1,0 +1,25 @@
+# A starting config for the marathond container image. Mount it at
+# /config/config.toml; config/example.toml documents every option.
+
+[server]
+# The image's default command passes `--bind 0.0.0.0:7878`, which
+# overrides this; it is here because the field is required.
+bind = "0.0.0.0:7878"
+# The image's data volume, holding the SQLite database.
+data_dir = "/data"
+# Required, because the server listens on every interface. Clients send it
+# as a bearer token.
+token = "change-me"
+
+# Media mounted into the container (read-only) at /media.
+[[source]]
+id = "media"
+kind = "filesystem"
+root = "/media"
+
+[[channel]]
+id = "example"
+number = 1
+name = "Example"
+items = [{ source = "media", path = "TV/Some Show" }]
+rule = { kind = "ordered" }

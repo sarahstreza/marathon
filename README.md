@@ -135,6 +135,39 @@ curl -s localhost:7878/api/v1/channels/<id>/now | jq
 mpv http://localhost:7878/api/v1/stream/<item-id>
 ```
 
+#### Running the server in a container
+
+The [`Dockerfile`](Dockerfile) builds a small image holding only
+`marathond`: a static (musl) binary on `distroless/static`, with no shell or
+libc, running as a non-root user. It works with Docker or Podman:
+
+```sh
+docker build -t marathond .
+cp docker/config.toml docker/marathon.toml   # then edit: token, channels
+docker run -d -p 7878:7878 \
+  -v "$PWD/docker/marathon.toml:/config/config.toml:ro" \
+  -v marathon-data:/data \
+  -v /path/to/videos:/media:ro \
+  marathond
+```
+
+or `docker compose -f docker/compose.yaml up -d` after editing the media
+path in [`docker/compose.yaml`](docker/compose.yaml). The image expects:
+
+| Path | What |
+|---|---|
+| `/config/config.toml` | The config; [`docker/config.toml`](docker/config.toml) is a starting point |
+| `/data` | `server.data_dir` (the SQLite database); a volume |
+| `/media` | Your videos, by convention (any path works if the config's source `root` matches) |
+
+The container listens on `0.0.0.0:7878` (the default command passes
+`--bind`), so `server.token` must be set. The server runs as uid 65532; a
+bind-mounted `/data` directory must be writable by it (a named volume is
+set up automatically). On SELinux hosts (Fedora), add `:z` to bind mounts.
+With rootless Podman, reach the server at `127.0.0.1` rather than
+`localhost`: the server listens on IPv4 only, and Podman's port forwarding
+resets connections to `::1`.
+
 ### Running the desktop client
 
 With a server running:

@@ -6,3 +6,4 @@
 *.mp4
 *.webm
 *.srt
+/docker/marathon.toml
