@@ -178,18 +178,41 @@ fn diff(
 }
 
 /// Recomputes `channel_items` from every channel's selectors.
+///
+/// Logs a warning for a channel that selects nothing, and for each entry
+/// in a selector's `files` that matches no item (most likely a typo, or a
+/// file that has been renamed).
 pub async fn rebuild_membership(db: &Db, config: &Config) -> Result<(), Error> {
     let items = db.item_paths().await?;
     let mut pairs = Vec::new();
     for channel in &config.channels {
         let mut seen = HashSet::new();
         for selector in channel.selectors() {
+            // `Config::validate` rejects selectors with invalid paths.
+            let Some(matcher) = selector.matcher() else {
+                continue;
+            };
+            let mut matched = vec![false; matcher.entries().len()];
             for (item_id, source_id, path) in &items {
-                if *source_id == selector.source
-                    && selector.matches(path)
-                    && seen.insert(item_id.as_str())
-                {
+                if *source_id != selector.source {
+                    continue;
+                }
+                let Some(entry) = matcher.matching_entry(path) else {
+                    continue;
+                };
+                matched[entry] = true;
+                if seen.insert(item_id.as_str()) {
                     pairs.push((channel.id.clone(), item_id.clone()));
+                }
+            }
+            if !selector.files.is_empty() {
+                for (entry, _) in matcher.entries().iter().zip(&matched).filter(|(_, m)| !**m) {
+                    tracing::warn!(
+                        channel = %channel.id,
+                        source = %selector.source,
+                        path = %entry,
+                        "channel lists a file that matches no item"
+                    );
                 }
             }
         }

@@ -77,7 +77,8 @@ impl Config {
     /// - source IDs, channel IDs, and channel numbers are unique;
     /// - every channel that is not hidden has a number;
     /// - every channel item selector names a configured source and a relative
-    ///   path that stays inside it (no `..`);
+    ///   path that stays inside it (no `..`), and its `files` and `exclude`
+    ///   entries are non-empty relative paths that stay inside that path;
     /// - every child channel entry names a configured channel, at most once
     ///   per parent, and channels nest without cycles and no deeper than
     ///   [`MAX_NESTING_DEPTH`] (PLAN.md M11).
@@ -161,6 +162,20 @@ impl Config {
                         channel.id,
                         selector.path.display()
                     ));
+                }
+                for (field, paths) in [("files", &selector.files), ("exclude", &selector.exclude)] {
+                    for path in paths {
+                        if relative(path).is_none_or(|p| p.is_empty()) {
+                            return invalid(format!(
+                                "channel {:?} has {field} entry {:?} under {:?}, which must \
+                                 be a non-empty path relative to `path` and must not \
+                                 contain `..`",
+                                channel.id,
+                                path.display(),
+                                selector.path.display()
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -475,6 +490,8 @@ struct RawEntry {
     source: Option<String>,
     path: Option<PathBuf>,
     recursive: Option<bool>,
+    files: Option<Vec<PathBuf>>,
+    exclude: Option<Vec<PathBuf>>,
     channel: Option<String>,
     weight: Option<u64>,
 }
@@ -489,25 +506,32 @@ impl TryFrom<RawEntry> for Entry {
                 source: None,
                 path: None,
                 recursive: None,
+                files: None,
+                exclude: None,
                 weight,
             } => Ok(Entry::Channel(ChildEntry { channel, weight })),
             RawEntry {
                 channel: Some(channel),
                 ..
             } => Err(format!(
-                "the entry for channel {channel:?} must not also have source, path, or \
-                 recursive; list the channel and the items as separate entries"
+                "the entry for channel {channel:?} must not also have source, path, \
+                 recursive, files, or exclude; list the channel and the items as \
+                 separate entries"
             )),
             RawEntry {
                 source: Some(source),
                 path: Some(path),
                 recursive,
+                files,
+                exclude,
                 weight,
                 channel: None,
             } => Ok(Entry::Items(ItemSelector {
                 source,
                 path,
                 recursive: recursive.unwrap_or(false),
+                files: files.unwrap_or_default(),
+                exclude: exclude.unwrap_or_default(),
                 weight,
             })),
             _ => Err(
@@ -529,6 +553,20 @@ impl TryFrom<RawEntry> for Entry {
 ///   its `Season N` subfolders, so `path = "TV/The Office (US)"` selects a
 ///   whole show laid out as `Season 1/`, `Season 2/`, and so on. Other
 ///   subfolders (extras, featurettes) are not included.
+///
+/// With `files`, the selector selects those paths (relative to `path`)
+/// instead of `path` itself, each by the same rules, and each in its own
+/// place in the channel's list for the `listed` rule:
+///
+/// ```toml
+/// { source = "nas", path = "TV/Doctor Who", files = [
+///     "Season 1/Doctor Who - S01E06 - Dalek.mkv",
+///     "Season 3/Doctor Who - S03E10 - Blink.mkv",
+/// ] }
+/// ```
+///
+/// `exclude` drops paths (relative to `path`) from whatever the selector
+/// would otherwise select: a file, or a folder and everything below it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemSelector {
@@ -537,7 +575,8 @@ pub struct ItemSelector {
     /// Path relative to the source root; a file or a directory. Empty or
     /// `"."` means the whole source.
     pub path: PathBuf,
-    /// Whether to include items in all subdirectories of `path`.
+    /// Whether to include items in all subdirectories of `path` (or of
+    /// each of `files` that is a directory).
     #[serde(default)]
     pub recursive: bool,
     /// Weight of each item selected, for a `weighted` rule with
@@ -545,6 +584,13 @@ pub struct ItemSelector {
     /// make it a hidden channel and use that as a child channel.)
     #[serde(default)]
     pub weight: Option<u64>,
+    /// Paths relative to `path` to select instead of `path` itself, in
+    /// order.
+    #[serde(default)]
+    pub files: Vec<PathBuf>,
+    /// Paths relative to `path` to leave out.
+    #[serde(default)]
+    pub exclude: Vec<PathBuf>,
 }
 
 impl ItemSelector {
@@ -552,44 +598,133 @@ impl ItemSelector {
     /// form item paths are stored in; empty for the root. `None` if the path
     /// is absolute, contains `..`, or is not valid UTF-8.
     pub fn relative_path(&self) -> Option<String> {
-        let mut parts = Vec::new();
-        for component in self.path.components() {
-            match component {
-                Component::Normal(part) => parts.push(part.to_str()?),
-                Component::CurDir => {}
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
-            }
-        }
-        Some(parts.join("/"))
+        relative(&self.path)
+    }
+
+    /// `files`, each as a `/`-separated path relative to `path` (as for
+    /// [`relative_path`](Self::relative_path)). `None` if any is invalid.
+    pub fn relative_files(&self) -> Option<Vec<String>> {
+        self.files.iter().map(|f| relative(f)).collect()
+    }
+
+    /// `exclude`, each as a `/`-separated path relative to `path`. `None`
+    /// if any is invalid.
+    pub fn relative_exclude(&self) -> Option<Vec<String>> {
+        self.exclude.iter().map(|f| relative(f)).collect()
+    }
+
+    /// Prepares this selector for matching against many item paths. `None`
+    /// if any of its paths is invalid (which [`Config::validate`] rejects).
+    pub fn matcher(&self) -> Option<SelectorMatcher> {
+        let base = self.relative_path()?;
+        let entries = if self.files.is_empty() {
+            vec![base.clone()]
+        } else {
+            let files = self.relative_files()?;
+            files.iter().map(|f| join(&base, f)).collect()
+        };
+        let exclude = self.relative_exclude()?;
+        Some(SelectorMatcher {
+            entries,
+            exclude: exclude.iter().map(|e| join(&base, e)).collect(),
+            recursive: self.recursive,
+        })
     }
 
     /// Whether this selector selects the item at `item_path` (`/`-separated,
     /// relative to the root of the selector's source). See the type docs for
     /// the rules.
     pub fn matches(&self, item_path: &str) -> bool {
-        let Some(base) = self.relative_path() else {
-            return false;
-        };
-        let rest = if base.is_empty() {
-            item_path
-        } else if item_path == base {
-            return true;
-        } else {
-            match item_path
-                .strip_prefix(base.as_str())
-                .and_then(|r| r.strip_prefix('/'))
-            {
-                Some(rest) => rest,
-                None => return false,
-            }
-        };
-        if self.recursive {
-            return true;
+        self.matcher()
+            .is_some_and(|m| m.matching_entry(item_path).is_some())
+    }
+}
+
+/// An [`ItemSelector`] ready to match item paths, from
+/// [`ItemSelector::matcher`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorMatcher {
+    /// What the selector selects, as paths relative to the source root, in
+    /// list order: `path`, or each of `files` under it.
+    entries: Vec<String>,
+    /// What it leaves out, relative to the source root.
+    exclude: Vec<String>,
+    recursive: bool,
+}
+
+impl SelectorMatcher {
+    /// The paths this selector selects, relative to the source root, in
+    /// list order: just `path`, or each of `files` under it.
+    pub fn entries(&self) -> &[String] {
+        &self.entries
+    }
+
+    /// The index in [`entries`](Self::entries) of the first entry that
+    /// selects `item_path`, or `None` if none does or it is excluded.
+    pub fn matching_entry(&self, item_path: &str) -> Option<usize> {
+        if self.exclude.iter().any(|e| is_at_or_below(e, item_path)) {
+            return None;
         }
-        match rest.split_once('/') {
-            None => true,
-            Some((dir, file)) => !file.contains('/') && crate::parse::is_season_folder(dir),
+        self.entries
+            .iter()
+            .position(|entry| selects(entry, self.recursive, item_path))
+    }
+}
+
+/// `path` as a `/`-separated string of its normal components; `None` if it
+/// is absolute, contains `..`, or is not valid UTF-8.
+fn relative(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
         }
+    }
+    Some(parts.join("/"))
+}
+
+/// `rest` (relative, `/`-separated) under `base`.
+fn join(base: &str, rest: &str) -> String {
+    match (base.is_empty(), rest.is_empty()) {
+        (true, _) => rest.to_owned(),
+        (false, true) => base.to_owned(),
+        (false, false) => format!("{base}/{rest}"),
+    }
+}
+
+/// Whether `item_path` is `prefix` itself or anywhere below it.
+fn is_at_or_below(prefix: &str, item_path: &str) -> bool {
+    prefix.is_empty()
+        || item_path == prefix
+        || item_path
+            .strip_prefix(prefix)
+            .is_some_and(|r| r.starts_with('/'))
+}
+
+/// Whether a selector for `base` (a file or folder) selects `item_path`;
+/// see [`ItemSelector`] for the rules.
+fn selects(base: &str, recursive: bool, item_path: &str) -> bool {
+    let rest = if base.is_empty() {
+        item_path
+    } else if item_path == base {
+        return true;
+    } else {
+        match item_path
+            .strip_prefix(base)
+            .and_then(|r| r.strip_prefix('/'))
+        {
+            Some(rest) => rest,
+            None => return false,
+        }
+    };
+    if recursive {
+        return true;
+    }
+    match rest.split_once('/') {
+        None => true,
+        Some((dir, file)) => !file.contains('/') && crate::parse::is_season_folder(dir),
     }
 }
 
@@ -815,6 +950,10 @@ mod tests {
     fn rejects_malformed_entries() {
         for (items, why) in [
             (r#"{ channel = "b", source = "nas" }"#, "must not also have"),
+            (
+                r#"{ channel = "b", files = ["x.mkv"] }"#,
+                "must not also have",
+            ),
             (r#"{ source = "nas" }"#, "needs either"),
             (r#"{ path = "a" }"#, "needs either"),
             (r#"{ channel = "b", wieght = 2 }"#, "unknown field"),
@@ -913,6 +1052,89 @@ mod tests {
             path: path.into(),
             recursive,
             weight: None,
+            files: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+
+    fn channel_items(items: &str) -> Vec<ItemSelector> {
+        let toml = with_channels(&format!(
+            "[[channel]]\nid = \"a\"\nnumber = 1\nname = \"x\"\n\
+             items = [{items}]\nrule = {{ kind = \"listed\" }}"
+        ));
+        let config = Config::from_toml_str(&toml).unwrap();
+        config.validate().unwrap();
+        config.channels[0].selectors().cloned().collect()
+    }
+
+    #[test]
+    fn files_select_each_listed_path_in_order() {
+        let items = channel_items(
+            r#"{ source = "nas", path = "TV/Show", files = [
+                "Season 2/e1.mkv", "Season 1/e2.mkv", "Specials",
+            ] }"#,
+        );
+        let m = items[0].matcher().unwrap();
+        assert_eq!(
+            m.entries(),
+            [
+                "TV/Show/Season 2/e1.mkv",
+                "TV/Show/Season 1/e2.mkv",
+                "TV/Show/Specials"
+            ]
+        );
+        assert_eq!(m.matching_entry("TV/Show/Season 2/e1.mkv"), Some(0));
+        assert_eq!(m.matching_entry("TV/Show/Season 1/e2.mkv"), Some(1));
+        // A folder entry selects as `path` would.
+        assert_eq!(m.matching_entry("TV/Show/Specials/xmas.mkv"), Some(2));
+        // Nothing else under `path` is selected.
+        assert_eq!(m.matching_entry("TV/Show/Season 1/e1.mkv"), None);
+        assert_eq!(m.matching_entry("TV/Show/pilot.mkv"), None);
+    }
+
+    #[test]
+    fn exclude_drops_files_and_whole_folders() {
+        let items = channel_items(
+            r#"{ source = "nas", path = "TV/Show", recursive = true, exclude = [
+                "Season 1/e2.mkv", "Extras",
+            ] }"#,
+        );
+        let s = &items[0];
+        assert!(s.matches("TV/Show/Season 1/e1.mkv"));
+        assert!(!s.matches("TV/Show/Season 1/e2.mkv"));
+        assert!(!s.matches("TV/Show/Extras/blooper.mkv"));
+        assert!(!s.matches("TV/Show/Extras/Deleted/scene.mkv"));
+        // Only the folder itself, not every name starting with it.
+        assert!(s.matches("TV/Show/Extras Plus/x.mkv"));
+    }
+
+    #[test]
+    fn exclude_applies_to_files_too() {
+        let items = channel_items(
+            r#"{ source = "nas", path = "", files = ["Show"], exclude = ["Show/Season 2"] }"#,
+        );
+        let s = &items[0];
+        assert!(s.matches("Show/Season 1/e1.mkv"));
+        assert!(!s.matches("Show/Season 2/e1.mkv"));
+    }
+
+    #[test]
+    fn rejects_bad_files_and_exclude_entries() {
+        for (field, entry) in [
+            ("files", "../x.mkv"),
+            ("files", "/x.mkv"),
+            ("files", ""),
+            ("files", "."),
+            ("exclude", "../x"),
+            ("exclude", ""),
+        ] {
+            let toml = with_channels(&format!(
+                "[[channel]]\nid = \"a\"\nnumber = 1\nname = \"x\"\n\
+                 items = [{{ source = \"nas\", path = \"TV\", {field} = [\"{entry}\"] }}]\n\
+                 rule = {{ kind = \"ordered\" }}"
+            ));
+            let err = validate(&toml).expect_err(entry);
+            assert!(err.contains(field), "{err}");
         }
     }
 
