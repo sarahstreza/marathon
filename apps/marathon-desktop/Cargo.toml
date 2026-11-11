@@ -14,8 +14,7 @@ workspace = true
 marathon-api.workspace = true
 marathon-client = { workspace = true, features = ["input-keyboard"] }
 marathon-mpv.workspace = true
-# Not used until embedded mode (M4); kept so the dependency graph matches
-# PLAN.md §4.
+# For --embedded: runs the server in-process (PLAN.md §9).
 marathon-server.workspace = true
 anyhow.workspace = true
 clap.workspace = true
