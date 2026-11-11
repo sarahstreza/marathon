@@ -58,6 +58,12 @@ struct FakeChannel {
     items: Vec<Item>,
     current: usize,
     position_ms: u64,
+    /// Hidden channels are left out of `channels`, as the server does.
+    hidden: bool,
+    /// Child channels the items come through (PLAN.md M11).
+    via: Vec<ChannelRef>,
+    /// What `now` and `advance` report the server skipped.
+    warnings: Vec<String>,
 }
 
 /// Mimics the server: ordered channels that loop, idempotent advance and
@@ -98,11 +104,13 @@ impl FakeChannel {
                 stream_url: url(&next.id),
                 item: next,
             }),
-            resolution_path: vec![ChannelRef {
+            resolution_path: std::iter::once(ChannelRef {
                 id: self.id.clone(),
                 name: format!("Channel {}", self.number),
-            }],
-            warnings: Vec::new(),
+            })
+            .chain(self.via.iter().cloned())
+            .collect(),
+            warnings: self.warnings.clone(),
         }
     }
 
@@ -134,6 +142,7 @@ impl Api for FakeApi {
             .borrow()
             .channels
             .iter()
+            .filter(|c| !c.hidden)
             .map(|c| ChannelSummary {
                 id: c.id.clone(),
                 number: c.number,
@@ -305,6 +314,9 @@ impl Harness {
                         .collect(),
                     current: 0,
                     position_ms: 0,
+                    hidden: false,
+                    via: Vec::new(),
+                    warnings: Vec::new(),
                 })
                 .collect(),
             history: Vec::new(),
@@ -1162,6 +1174,102 @@ fn go_to_channel_by_id() {
 }
 
 #[test]
+fn hidden_channels_are_skipped_by_flipping_and_number_but_reachable_by_id() {
+    let mut h = Harness::new(3, 2);
+    h.server.borrow_mut().channels[1].hidden = true;
+    h.tuner.start(Some(1)).unwrap();
+    h.action(Action::ChannelUp);
+    assert_eq!(h.tuner.now().unwrap().channel_id, "c3");
+    h.action(Action::ChannelDown);
+    assert_eq!(h.tuner.now().unwrap().channel_id, "c1");
+    let err = h
+        .tuner
+        .handle_action(Action::GoToChannel { number: 2 })
+        .unwrap_err();
+    assert!(matches!(err, TunerError::NoSuchChannel(ref n) if n == "2"));
+    assert_eq!(h.tuner.now().unwrap().channel_id, "c1");
+
+    // By ID, the hidden channel is reachable.
+    h.action(Action::GoToChannelId { id: "c2".into() });
+    assert_eq!(h.tuner.now().unwrap().channel_id, "c2");
+    // Flipping from it goes to its visible neighbours.
+    h.action(Action::ChannelUp);
+    assert_eq!(h.tuner.now().unwrap().channel_id, "c3");
+    // And the guide lists only visible channels.
+    h.action(Action::ToggleGuide);
+    let guide = h
+        .take_ui()
+        .into_iter()
+        .rev()
+        .find_map(|cue| match cue {
+            UiEvent::Guide(Some(guide)) => Some(guide),
+            _ => None,
+        })
+        .unwrap();
+    let numbers: Vec<u32> = guide.rows.iter().map(|r| r.number).collect();
+    assert_eq!(numbers, [1, 3]);
+}
+
+#[test]
+fn nested_channels_report_their_resolution_path() {
+    let mut h = Harness::new(2, 2);
+    h.server.borrow_mut().channels[0].via = vec![ChannelRef {
+        id: "child".into(),
+        name: "Child".into(),
+    }];
+    h.tuner.start(Some(1)).unwrap();
+    let events = h.take_events();
+    let path = vec!["c1".to_owned(), "child".to_owned()];
+    assert!(
+        events.iter().any(|e| matches!(e,
+            Event::ChannelChanged { resolution_path, .. } if *resolution_path == path)),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e,
+            Event::NowPlaying { resolution_path, .. } if *resolution_path == path)),
+        "{events:?}"
+    );
+    let banner = h
+        .take_ui()
+        .into_iter()
+        .find_map(|cue| match cue {
+            UiEvent::Playing { banner, .. } => Some(banner),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(banner.item_line(), "Child: c1-0");
+}
+
+#[test]
+fn what_the_server_skipped_is_reported_as_errors() {
+    let mut h = Harness::new(2, 2);
+    let warning = "channel \"empty\" has nothing to play; channel \"c1\" skipped it";
+    h.server.borrow_mut().channels[0].warnings = vec![warning.into()];
+    h.tuner.start(Some(1)).unwrap();
+    let events = h.take_events();
+    let error = events
+        .iter()
+        .position(|e| matches!(e, Event::Error { message } if message == warning));
+    let playing = events
+        .iter()
+        .position(|e| matches!(e, Event::NowPlaying { .. }));
+    assert!(error.is_some() && error < playing, "{events:?}");
+    // Playback carries on.
+    assert_eq!(h.tuner.now().unwrap().item.id, "c1-0");
+
+    // Advancing at the end of an item reports them too.
+    h.tuner.handle_player_event(PlayerEvent::Ended).unwrap();
+    let events = h.take_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Error { message } if message == warning)),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn play_and_pause_are_idempotent_and_emit_events() {
     let mut h = Harness::new(1, 2);
     h.tuner.start(Some(1)).unwrap();
@@ -1214,6 +1322,7 @@ fn banner(number: u32, title: &str) -> Banner {
         channel_name: format!("Channel {number}"),
         title: Some(title.into()),
         show: None,
+        via: None,
     }
 }
 

@@ -84,12 +84,10 @@ fn banner(overlay: &Overlay, painter: &Painter, screen: Rect, now: Instant) {
         TEXT,
         width - time_width,
     );
-    let item = match (&banner.show, &banner.title) {
-        _ if overlay.tuning && banner.title.is_none() => "Tuning…".to_owned(),
-        (Some(show), Some(title)) => format!("{show} · {title}"),
-        (None, Some(title)) => title.clone(),
-        (Some(show), None) => show.clone(),
-        (None, None) => String::new(),
+    let item = if overlay.tuning && banner.title.is_none() {
+        "Tuning…".to_owned()
+    } else {
+        banner.item_line()
     };
     line(
         painter,
