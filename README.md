@@ -33,6 +33,7 @@ milestone checklists. Read it before changing anything substantial.
 | `apps/marathon-desktop` | Desktop client binary |
 | `config/example.toml` | Annotated example configuration |
 | `scripts/make-test-library.sh` | Generates a fake video library for testing |
+| `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
 
 Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 `apps/marathond/tests/dependency_graph.rs`.
@@ -107,33 +108,11 @@ token, and `--channel N` picks the starting channel; by default it resumes
 the channel this client watched last. Without `--windowed` it starts
 fullscreen. Set `RUST_LOG=info,mpv=debug` to see mpv's own log.
 
-On screen, a channel banner (number, name, item, progress) appears as soon
-as a channel switch starts, and for a few seconds on info. The guide lists
-every channel and what it is on. Errors show briefly in the top right. The
-mouse cursor hides after 3s without mouse activity.
-
-| Key | Gamepad | Mouse | Does |
-|---|---|---|---|
-| PgUp / PgDn | Right / left shoulder | Wheel up / down | Channel up / down |
-| Up / Down | D-pad up / down | | Channel up / down; in the guide, move the highlight |
-| Left / Right | D-pad left / right | | Seek −10s / +10s (nothing in the guide) |
-| Enter | A (South) | Click | In the guide, tune to the highlighted channel; otherwise show info |
-| digits, then Enter or a pause | | | Go to channel number |
-| Space | Start | | Pause / resume |
-| N / P | Right / left trigger | | Next / previous item |
-| S | X (West) | | Cycle subtitles (on/off with one track) |
-| F | Left stick click | | Toggle fullscreen |
-| I | Select (Back/View) | | Show the banner |
-| G | Y (North) | | Open / close the guide |
-| Esc | B (East) | | Close the guide (or the banner) |
-| Q | Mode (Xbox/PS button) | | Quit (saves the position) |
-
-Controllers can be plugged in and out while the app runs. Holding
-Left/Right (key or D-pad) keeps seeking.
-
-Items that cannot be played (e.g. a file renamed after the last scan) are
-skipped with an on-screen message; after five failures in a row the
-client stops trying until you change channel or press N.
+**Controls:** see [`docs/CONTROLS.md`](docs/CONTROLS.md), the user guide
+for keyboard, mouse, and game controller. In short: PgUp/PgDn (or the
+arrows, the controller's shoulder buttons, or the mouse wheel) change
+channel; G opens the guide; Space pauses; N/P skip episodes; I shows
+what's on; Q quits.
 
 The client stores only a random client ID, in `marathon/client-id` under
 the user's config directory (`~/.config` on Linux).
