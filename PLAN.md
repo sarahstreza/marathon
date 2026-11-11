@@ -220,6 +220,27 @@ items = [
 rule = { kind = "shuffled" }
 ```
 
+A channel can also pick exactly which files it plays, and in what order.
+`files` (relative to `path`) selects those paths instead of `path` itself,
+each in its own place in the list; `exclude` (also relative to `path`) leaves
+out files, or folders and everything in them. The `listed` rule (§6) plays
+items in the order the config lists them; other rules ignore list order:
+
+```toml
+[[channel]]
+id = "doctor-who"
+number = 9
+name = "Doctor Who: The Good Ones"
+items = [
+  { source = "nas", path = "TV/Doctor Who", files = [
+      "Season 3/Doctor Who - S03E10 - Blink.mkv",
+      "Season 1/Doctor Who - S01E06 - Dalek.mkv",
+  ] },
+  { source = "nas", path = "TV/Doctor Who/Specials", exclude = ["The Infinite Quest.mkv"] },
+]
+rule = { kind = "listed" }
+```
+
 Filesystem sources treat mounted SMB/NFS shares as ordinary paths, which covers
 networked storage on desktop servers for the MVP.
 
@@ -251,6 +272,11 @@ Rules are data, composed from a small set of primitives:
 
 - `ordered` — natural order (by season/episode when parsed, else natural sort of
   path). Loops at the end.
+- `listed` — the order the channel's config lists its items in: each
+  selector's `path`, or each of its `files`, and each child channel (M11), in
+  turn, with the contents of a listed folder in natural order. Loops at the end. Items carry their list
+  position in `ItemKey::position`; if the current item moves in the list,
+  playback carries on from its new place.
 - `shuffled` — bag shuffle: every item plays once per cycle before any repeats.
   Reshuffle with a new seed per cycle, and avoid the last item of one cycle
   being the first of the next.
@@ -295,7 +321,9 @@ items         (id TEXT PK, source_id TEXT, path TEXT, size INTEGER, mtime INTEGE
                UNIQUE(source_id, path))
                -- external_id: the source's own ID (Jellyfin's), for streaming
 channels      (id TEXT PK, number INTEGER, name TEXT, rule_json TEXT, selectors_json TEXT)
-channel_items (channel_id TEXT, item_id TEXT, PRIMARY KEY(channel_id, item_id))
+channel_items (channel_id TEXT, item_id TEXT, position INTEGER,
+               PRIMARY KEY(channel_id, item_id))
+               -- position: where the config lists the item, for `listed`
 channel_state (channel_id TEXT PK, item_id TEXT, position_ms INTEGER,
                cursor_json TEXT, updated_at INTEGER,
                children_json TEXT)  -- M11: an independent parent's states for its children
@@ -981,7 +1009,8 @@ Semantics:
 
 As built: child channel entries reach the rules engine as items with ID
 `channel:<id>` and path `channels/<id>`, so `ordered` plays children in
-order of channel ID, and grouping by folder puts them in one group. A path
+order of channel ID (`listed` plays them where the config lists them), and
+grouping by folder puts them in one group. A path
 selector's entries are its individual items (its `weight` applies to each);
 to weigh a folder as one entry, make it a hidden child channel. `previous`
 undoes `advance`: the parent steps back, and if it lands on a child, the
