@@ -10,9 +10,10 @@ and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
 overlay), M3.5 (seams: pluggable input, `Action`/`Event` control plane,
 skipping unplayable items, windowing kept at the edge), M4 (embedded
 mode: the desktop client runs its own server), M5 (on-screen overlay,
-mouse, and gamepad), M6 (remote control and events over the API), and M7
-(HDMI-CEC: the TV's remote, and pausing when the TV switches away) are
-implemented and awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
+mouse, and gamepad), M6 (remote control and events over the API), M7
+(HDMI-CEC: the TV's remote, and pausing when the TV switches away), and M8
+(Jellyfin libraries as a source) are implemented and awaiting their manual
+checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -81,7 +82,12 @@ inside `apps/marathon-desktop/src/platform/` and out of `marathon-client`.
 cargo run -p marathond -- --config path/to/config.toml
 ```
 
-See [`config/example.toml`](config/example.toml) for the config format. The
+See [`config/example.toml`](config/example.toml) for the config format.
+Sources are folders (`kind = "filesystem"`, including mounted network
+shares) or Jellyfin servers (`kind = "jellyfin"`, with a `url` and an
+`api_key`). A Jellyfin library appears as a folder named after it, so
+channels select from it the same way; Marathon streams its files through
+itself, so players only ever talk to Marathon. The
 API is served under `/api/v1` (PLAN.md §8); its OpenAPI document is at
 `/api/v1/openapi.json`. The SQLite database lives in `data_dir`. Set
 `RUST_LOG=debug` for more logging.

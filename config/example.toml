@@ -14,6 +14,19 @@ id = "nas"
 kind = "filesystem"
 root = "/mnt/nas/video"
 
+# A Jellyfin server (uncomment to use). Each library shows up as a folder
+# named after it, holding the same folders as on the Jellyfin server, so a
+# channel selects e.g. `path = "Shows/The Office (US)"`. Episode numbers,
+# titles, and durations come from Jellyfin, and Marathon streams the
+# original files through itself (never a transcode). Create the API key in
+# Jellyfin's Dashboard → API Keys; it is never logged or shown by the API.
+# [[source]]
+# id = "jellyfin"
+# kind = "jellyfin"
+# url = "http://jellyfin.lan:8096"
+# api_key = "0123456789abcdef0123456789abcdef"
+# libraries = ["Shows", "Films"]       # optional; default: every library
+
 # Channel `items` select files from a source. A `path` naming a folder picks
 # up the videos directly in it plus those in its `Season N` subfolders, so a
 # show laid out as `Show/Season 1/...` needs no `recursive`. Add
