@@ -7,9 +7,10 @@ it run and it keeps going.
 
 **Status:** early development. Milestones M0 (scaffold), M1 (rules engine),
 and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
-overlay) and M3.5 (seams: pluggable input, `Action`/`Event` control plane,
-skipping unplayable items, windowing kept at the edge) are implemented and
-awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
+overlay), M3.5 (seams: pluggable input, `Action`/`Event` control plane,
+skipping unplayable items, windowing kept at the edge), and M4 (embedded
+mode: the desktop client runs its own server) are implemented and awaiting
+their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -86,6 +87,18 @@ With a server running:
 cargo run -p marathon-desktop -- --windowed
 ```
 
+Or, with no separate server, run one inside the app (embedded mode):
+
+```sh
+cargo run -p marathon-desktop -- --embedded --config path/to/config.toml --windowed
+```
+
+The embedded server reads the same config as `marathond` and uses its
+`data_dir`. It listens on `127.0.0.1` only, on a port the OS picks
+(`server.bind` is ignored), and stops when the app quits. If the config
+sets a `token`, the app sends it. Embedded mode and a standalone
+`marathond` share state only if they use the same `data_dir`.
+
 `--server URL` (or `MARATHON_SERVER`) points it at a server other than
 `http://127.0.0.1:7878`, `--token` (or `MARATHON_TOKEN`) supplies a bearer
 token, and `--channel N` picks the starting channel; by default it resumes
@@ -135,6 +148,8 @@ programming rule over that library, so serving it is one command:
 
 ```sh
 cargo run -p marathond -- --config test-library/marathon.toml
+# or, without a separate server:
+cargo run -p marathon-desktop -- --embedded --config test-library/marathon.toml --windowed
 ```
 
 The server's database goes in `test-library/.marathon/`; delete that
