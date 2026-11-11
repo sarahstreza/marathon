@@ -23,6 +23,12 @@ uuid.workspace = true
 tempfile.workspace = true
 
 [features]
-default = ["input-keyboard"]
+default = ["input-keyboard", "input-mouse", "input-gamepad"]
 # Keyboard bindings as an InputSource (the windowing layer feeds it keys).
 input-keyboard = []
+# Mouse wheel and click bindings as an InputSource (fed by the windowing
+# layer).
+input-mouse = []
+# Gamepad button bindings. Only the mapping: the gamepad library and its
+# InputSource live in the app's platform layer (PLAN.md §2 decision 7).
+input-gamepad = []

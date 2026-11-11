@@ -4,7 +4,8 @@
 //! A source is started with an [`ActionSender`] into the action bus, runs on
 //! its own thread or task, sends [`Action`](marathon_api::Action)s, and
 //! stops cleanly when asked. Each concrete source lives behind a cargo
-//! feature (`input-keyboard`, later `input-gamepad`, `input-cec`, ...) so a
+//! feature (`input-keyboard`, `input-mouse`, `input-gamepad`, later
+//! `input-cec`, ...) so a
 //! build includes only what its platform needs.
 
 use crate::bus::{ActionBus, ActionSender};

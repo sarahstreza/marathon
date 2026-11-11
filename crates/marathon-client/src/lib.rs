@@ -9,7 +9,8 @@
 //!   [`InputSource`](input::InputSource) adapters that feed it.
 //! - [`navigation`]: resolving `Navigate`/`Select`/`Back` by context.
 //! - [`ui`]: the cues the tuner gives the on-screen overlay.
-//! - [`keyboard`] (feature `input-keyboard`): keyboard bindings.
+//! - [`keyboard`] (feature `input-keyboard`), [`mouse`] (`input-mouse`),
+//!   [`gamepad`] (`input-gamepad`): bindings for local input devices.
 //! - [`client_id`]: the per-installation client ID.
 //!
 //! The [`Action`](marathon_api::Action) and [`Event`](marathon_api::Event)
@@ -21,9 +22,13 @@
 pub mod api;
 pub mod bus;
 pub mod client_id;
+#[cfg(feature = "input-gamepad")]
+pub mod gamepad;
 pub mod input;
 #[cfg(feature = "input-keyboard")]
 pub mod keyboard;
+#[cfg(feature = "input-mouse")]
+pub mod mouse;
 pub mod navigation;
 pub mod player;
 pub mod tuner;
