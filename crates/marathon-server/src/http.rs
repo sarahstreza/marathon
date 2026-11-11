@@ -20,9 +20,9 @@ use axum::{Json, Router};
 use futures_util::Stream;
 use marathon_api::{
     API_PREFIX, API_VERSION, Action, ActionAccepted, AdvanceReason, AdvanceRequest,
-    CLIENT_ID_HEADER, ChannelSummary, ClientInfo, ClientPlaying, DEFAULT_CLIENT, Direction,
-    ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item, NextItem, Now,
-    PreviousRequest, ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo,
+    CLIENT_ID_HEADER, ChannelRef, ChannelSummary, ClientInfo, ClientPlaying, DEFAULT_CLIENT,
+    Direction, ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item, NextItem, Now,
+    PlannedItem, PreviousRequest, ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo,
 };
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
@@ -31,6 +31,7 @@ use tower_http::services::ServeFile;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 
+use crate::PlanLimit;
 use crate::app::App;
 use crate::error::ApiError;
 use crate::playback::subtitles_of;
@@ -51,6 +52,7 @@ pub fn router(app: App) -> Router {
         .route("/channels/{id}/progress", post(progress))
         .route("/channels/{id}/advance", post(advance))
         .route("/channels/{id}/previous", post(previous))
+        .route("/channels/{id}/plan", get(plan))
         .route("/items/{id}", get(item))
         .route("/stream/{item_id}", get(stream))
         .route("/subtitles/{item_id}/{n}", get(subtitle))
@@ -142,11 +144,28 @@ async fn version() -> Json<VersionInfo> {
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct ListChannelsParams {
+    #[serde(default)]
+    include_hidden: bool,
+}
+
 #[utoipa::path(get, path = "/api/v1/channels", tag = "channels",
-    responses((status = 200, description = "Every channel, by number, with what it is on",
-        body = Vec<ChannelSummary>)))]
-async fn list_channels(State(app): State<App>) -> Result<Json<Vec<ChannelSummary>>, ApiError> {
-    Ok(Json(app.list_channels().await?))
+    description = "Channels in guide order (by number) with what each is on. Hidden channels \
+                   (PLAN.md M11) are left out unless `include_hidden=true`, and then come last.",
+    params(("include_hidden" = Option<bool>, Query,
+        description = "Also list hidden channels (default false)")),
+    responses(
+        (status = 200, description = "Channels, by number, with what each is on",
+            body = Vec<ChannelSummary>),
+        (status = 400, description = "Malformed query", body = ErrorBody),
+    ))]
+async fn list_channels(
+    State(app): State<App>,
+    query: Result<Query<ListChannelsParams>, QueryRejection>,
+) -> Result<Json<Vec<ChannelSummary>>, ApiError> {
+    let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    Ok(Json(app.list_channels(params.include_hidden).await?))
 }
 
 #[utoipa::path(get, path = "/api/v1/channels/{id}/now", tag = "channels",
@@ -235,6 +254,43 @@ async fn previous(
         app.previous(&id, &req.from_item_id, client.as_deref())
             .await?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct PlanParams {
+    items: Option<u32>,
+    hours: Option<u32>,
+}
+
+#[utoipa::path(get, path = "/api/v1/channels/{id}/plan", tag = "channels",
+    description = "What the channel will play, starting with its current item, if it plays on \
+                   without interruption: the same sequence playback produces, through any \
+                   child channels, as long as nothing else moves the channel or its children \
+                   meanwhile. Does not move the channel or record an event.",
+    params(
+        ("id" = String, Path, description = "Channel ID"),
+        ("items" = Option<u32>, Query,
+            description = "At most this many items (default 10, or 500 with `hours`; at most 500)"),
+        ("hours" = Option<u32>, Query,
+            description = "Stop at the first item starting this many hours ahead or later"),
+    ),
+    responses(
+        (status = 200, description = "The items, in order", body = Vec<PlannedItem>),
+        (status = 400, description = "Malformed query", body = ErrorBody),
+        (status = 404, description = "No such channel", body = ErrorBody),
+        (status = 409, description = "The channel has no playable items", body = ErrorBody),
+    ))]
+async fn plan(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    query: Result<Query<PlanParams>, QueryRejection>,
+) -> Result<Json<Vec<PlannedItem>>, ApiError> {
+    let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let limit = PlanLimit {
+        items: params.items,
+        hours: params.hours,
+    };
+    Ok(Json(app.plan(&id, limit).await?))
 }
 
 #[utoipa::path(get, path = "/api/v1/items/{id}", tag = "library",
@@ -349,13 +405,18 @@ async fn history(
                 tracing::warn!(id = %row.id, kind = %row.kind, "skipping event of unknown kind");
                 return None;
             };
+            let resolution_path = row
+                .resolution_path_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
             Some(HistoryEntry {
                 id: row.id,
                 ts_ms: row.ts,
                 client_id: row.client_id,
                 channel_id: row.channel_id,
-                resolved_channel_id: None,
-                resolution_path: Vec::new(),
+                resolved_channel_id: row.resolved_channel_id,
+                resolution_path,
                 item_id: row.item_id,
                 kind,
                 position_ms: row.position_ms.and_then(|p| u64::try_from(p).ok()),
@@ -589,11 +650,11 @@ fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
                        with an `X-Marathon-Client` header.",
     ),
     paths(
-        health, version, list_channels, now, progress, advance, previous, item, stream,
+        health, version, list_channels, now, progress, advance, previous, plan, item, stream,
         subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
     ),
     components(schemas(
-        Health, VersionInfo, ChannelSummary, Now, NextItem, Item, Subtitle, ProgressReport,
+        Health, VersionInfo, ChannelSummary, ChannelRef, Now, NextItem, PlannedItem, Item, Subtitle, ProgressReport,
         AdvanceRequest, AdvanceReason, PreviousRequest, HistoryEntry, EventKind, ScanReport, ErrorBody,
         ErrorCode, Action, Direction, Event, RelayedEvent, ClientInfo, ClientPlaying,
         ActionAccepted,

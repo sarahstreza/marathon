@@ -30,6 +30,10 @@ pub enum ApiError {
     NotFound(String),
     #[error("channel {0} has no playable items")]
     ChannelEmpty(String),
+    /// A channel with child channels found nothing to play in them
+    /// (PLAN.md M11).
+    #[error("channel {channel} has nothing to play: {detail}")]
+    NothingToPlay { channel: String, detail: String },
     #[error("item {reported} is not the current item of channel {channel} (it is on {current})")]
     StaleItem {
         channel: String,
@@ -62,7 +66,7 @@ impl ApiError {
             ApiError::BadRequest(_) => ErrorCode::BadRequest,
             ApiError::Unauthorized => ErrorCode::Unauthorized,
             ApiError::NotFound(_) => ErrorCode::NotFound,
-            ApiError::ChannelEmpty(_) => ErrorCode::ChannelEmpty,
+            ApiError::ChannelEmpty(_) | ApiError::NothingToPlay { .. } => ErrorCode::ChannelEmpty,
             ApiError::StaleItem { .. } => ErrorCode::StaleItem,
             ApiError::Upstream(_) => ErrorCode::Upstream,
             ApiError::Internal(_) => ErrorCode::Internal,
@@ -74,7 +78,9 @@ impl ApiError {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
-            ApiError::ChannelEmpty(_) | ApiError::StaleItem { .. } => StatusCode::CONFLICT,
+            ApiError::ChannelEmpty(_)
+            | ApiError::NothingToPlay { .. }
+            | ApiError::StaleItem { .. } => StatusCode::CONFLICT,
             ApiError::Upstream(_) => StatusCode::BAD_GATEWAY,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

@@ -25,6 +25,7 @@ pub mod embedded;
 mod error;
 pub mod http;
 pub mod jellyfin;
+mod nested;
 pub mod parse;
 mod playback;
 pub mod relay;
@@ -37,6 +38,7 @@ use std::time::Duration;
 
 pub use app::{App, DATABASE_FILE, StartError};
 pub use error::{ApiError, Error};
+pub use playback::PlanLimit;
 
 use config::Config;
 
