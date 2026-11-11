@@ -106,6 +106,18 @@ cargo run -p marathond -- --config path/to/config.toml
 ```
 
 See [`config/example.toml`](config/example.toml) for the config format.
+
+By default the server listens on `127.0.0.1:7878`, so only the same machine
+can reach it. To serve other devices on the network (the Android app, a
+desktop client on another machine), set `server.bind` in the config, or
+override it with `--bind`:
+
+```sh
+cargo run -p marathond -- --config path/to/config.toml --bind 0.0.0.0:7878
+```
+
+A non-loopback address requires `server.token`; clients then send it as a
+bearer token (`--token` on the desktop client).
 Sources are folders (`kind = "filesystem"`, including mounted network
 shares) or Jellyfin servers (`kind = "jellyfin"`, with a `url` and an
 `api_key`). A Jellyfin library appears as a folder named after it, so

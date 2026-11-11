@@ -4,6 +4,8 @@
 # lives in the SQLite database under `data_dir`.
 
 [server]
+# Loopback only; use "0.0.0.0:7878" to listen on every interface (needs a
+# token). `marathond --bind ADDR:PORT` overrides this.
 bind = "127.0.0.1:7878"
 data_dir = "~/.local/share/marathon"   # SQLite lives here
 # token = "change-me"                  # required if bind is not loopback

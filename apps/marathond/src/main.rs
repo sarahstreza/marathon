@@ -1,12 +1,13 @@
 //! `marathond`: the Marathon server daemon.
 //!
 //! ```text
-//! marathond --config path/to/config.toml
+//! marathond --config path/to/config.toml [--bind 0.0.0.0:7878]
 //! marathond --print-openapi > openapi.json
 //! ```
 //!
 //! Logging is controlled with `RUST_LOG` (default `info`).
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -28,6 +29,11 @@ struct Args {
         required_unless_present = "print_openapi"
     )]
     config: Option<PathBuf>,
+    /// Address to listen on, overriding `server.bind` in the config, e.g.
+    /// `0.0.0.0:7878` to accept connections from other machines. A
+    /// non-loopback address requires `server.token` to be set.
+    #[arg(long, value_name = "ADDR:PORT")]
+    bind: Option<SocketAddr>,
     /// Print the API's OpenAPI document as JSON and exit, without loading a
     /// config or starting a server. The Android client is generated from
     /// it (scripts/gen-android-api.sh).
@@ -56,7 +62,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), config = %config_path.display(), "marathond starting");
 
-    let config = Config::load(&config_path)?;
+    let mut config = Config::load(&config_path)?;
+    if let Some(bind) = args.bind {
+        tracing::info!(%bind, config_bind = %config.server.bind, "--bind overrides server.bind");
+        config.server.bind = bind;
+    }
     let server = Server::bind(config)
         .await
         .context("failed to start the server")?;
@@ -93,4 +103,23 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_flag_parses_an_address() {
+        let args =
+            Args::try_parse_from(["marathond", "-c", "c.toml", "--bind", "0.0.0.0:7878"]).unwrap();
+        assert_eq!(args.bind, Some("0.0.0.0:7878".parse().unwrap()));
+        let args = Args::try_parse_from(["marathond", "-c", "c.toml"]).unwrap();
+        assert_eq!(args.bind, None);
+    }
+
+    #[test]
+    fn bind_flag_rejects_a_bare_ip() {
+        assert!(Args::try_parse_from(["marathond", "-c", "c.toml", "--bind", "0.0.0.0"]).is_err());
+    }
 }
