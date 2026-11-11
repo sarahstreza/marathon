@@ -36,6 +36,10 @@ pub enum Rule {
     /// Natural order (season/episode when parsed, else natural sort of path).
     /// Loops at the end.
     Ordered,
+    /// The order the channel's definition lists its items in (see
+    /// [`ItemKey::position`]), with items that share a position, such as
+    /// the contents of one folder, in natural order. Loops at the end.
+    Listed,
     /// Bag shuffle: every item plays once per cycle before any repeats.
     Shuffled,
     /// Partition items into groups, order the groups, then order items within
@@ -115,6 +119,10 @@ mod tests {
         assert_eq!(
             parse(r#"rule = { kind = "shuffled" }"#).unwrap(),
             Rule::Shuffled
+        );
+        assert_eq!(
+            parse(r#"rule = { kind = "listed" }"#).unwrap(),
+            Rule::Listed
         );
     }
 

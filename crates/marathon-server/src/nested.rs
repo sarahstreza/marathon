@@ -156,6 +156,7 @@ pub(crate) fn item_key(row: &ItemRow) -> ItemKey {
         show: row.show.clone(),
         season: row.season.and_then(|s| u32::try_from(s).ok()),
         episode: row.episode.and_then(|e| u32::try_from(e).ok()),
+        position: None,
     }
 }
 
@@ -169,6 +170,7 @@ pub(crate) fn child_key(channel_id: &str) -> ItemKey {
         show: None,
         season: None,
         episode: None,
+        position: None,
     }
 }
 

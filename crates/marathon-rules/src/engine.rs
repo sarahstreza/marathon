@@ -45,6 +45,8 @@ pub(crate) enum State {
     Start,
     /// The `ordered` rule needs nothing beyond the current item.
     Ordered,
+    /// Nor does the `listed` rule.
+    Listed,
     /// The `shuffled` rule's current cycle.
     Shuffled { bag: Bag<String> },
     /// The `grouped` rule's state.
@@ -125,16 +127,23 @@ pub fn next_weighted(
 ) -> Option<Step> {
     let start = Cursor::default();
     let cursor = cursor.unwrap_or(&start);
-    let catalog = Catalog::new(items);
+    let catalog = catalog_for(rule, items);
     let seed = cursor.seed;
     let from = cursor.current.as_ref();
 
     let (item, state) = match rule {
         Rule::Ordered => {
             let item = from
-                .and_then(|f| catalog::after(catalog.items(), f))
+                .and_then(|f| catalog::after(catalog.items(), f, ItemKey::natural_order))
                 .or_else(|| catalog.items().first().copied())?;
             (item, State::Ordered)
+        }
+        Rule::Listed => {
+            let item = from
+                .map(|f| listed_from(&catalog, f))
+                .and_then(|f| catalog::after(catalog.items(), f, ItemKey::listed_order))
+                .or_else(|| catalog.items().first().copied())?;
+            (item, State::Listed)
         }
         Rule::Shuffled => {
             let present = |id: &String| catalog.contains(id);
@@ -191,20 +200,27 @@ pub fn next_weighted(
 /// - for shuffles, stepping back past the start of the previous cycle (only
 ///   one cycle of history is kept);
 /// - for the weighted rule, stepping back more than 50 picks;
-/// - the cursor was made by a different rule, unless the rule is `ordered`.
+/// - the cursor was made by a different rule, unless the rule is `ordered`
+///   or `listed`.
 ///
-/// The `ordered` rule wraps around, so `previous` from its first item is its
-/// last.
+/// The `ordered` and `listed` rules wrap around, so `previous` from their
+/// first item is their last.
 pub fn previous(rule: &Rule, items: &[ItemKey], cursor: &Cursor) -> Option<Step> {
-    let catalog = Catalog::new(items);
+    let catalog = catalog_for(rule, items);
     let from = cursor.current.as_ref()?;
     let seed = cursor.seed;
 
     let (item, state) = match rule {
         Rule::Ordered => {
-            let item = catalog::before(catalog.items(), from)
+            let item = catalog::before(catalog.items(), from, ItemKey::natural_order)
                 .or_else(|| catalog.items().last().copied())?;
             (item, State::Ordered)
+        }
+        Rule::Listed => {
+            let from = listed_from(&catalog, from);
+            let item = catalog::before(catalog.items(), from, ItemKey::listed_order)
+                .or_else(|| catalog.items().last().copied())?;
+            (item, State::Listed)
         }
         Rule::Shuffled => {
             let State::Shuffled { bag } = &cursor.state else {
@@ -233,4 +249,22 @@ pub fn previous(rule: &Rule, items: &[ItemKey], cursor: &Cursor) -> Option<Step>
             state,
         },
     })
+}
+
+/// The items of one call, sorted the way `rule` walks them.
+fn catalog_for<'a>(rule: &Rule, items: &'a [ItemKey]) -> Catalog<'a> {
+    match rule {
+        Rule::Listed => Catalog::sorted_by(items, ItemKey::listed_order),
+        Rule::Ordered | Rule::Shuffled | Rule::Grouped { .. } | Rule::Weighted { .. } => {
+            Catalog::new(items)
+        }
+    }
+}
+
+/// The item the `listed` rule steps from: the catalog's copy of the
+/// cursor's item if it is still there, so that an item moved to another
+/// place in the list carries on from its new place; otherwise the cursor's
+/// own copy, so that a removed item carries on from where it used to be.
+fn listed_from<'a>(catalog: &Catalog<'a>, from: &'a ItemKey) -> &'a ItemKey {
+    catalog.get(&from.id).unwrap_or(from)
 }

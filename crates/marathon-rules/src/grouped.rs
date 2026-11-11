@@ -180,8 +180,10 @@ pub(crate) fn next<'a>(
     // Next item in the same group, if any.
     match &st.within {
         None => {
-            let next_in_group =
-                from.and_then(|f| g.members(&st.group).and_then(|m| catalog::after(m, f)));
+            let next_in_group = from.and_then(|f| {
+                g.members(&st.group)
+                    .and_then(|m| catalog::after(m, f, ItemKey::natural_order))
+            });
             if let Some(item) = next_in_group {
                 return Some((item, State::Grouped(st)));
             }
@@ -232,7 +234,10 @@ pub(crate) fn previous<'a>(
     // Previous item in the same group, if any.
     match &st.within {
         None => {
-            if let Some(item) = g.members(&st.group).and_then(|m| catalog::before(m, from)) {
+            if let Some(item) = g
+                .members(&st.group)
+                .and_then(|m| catalog::before(m, from, ItemKey::natural_order))
+            {
                 return Some((item, State::Grouped(st)));
             }
         }

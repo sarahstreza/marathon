@@ -12,6 +12,7 @@ pub fn episode(season: u32, episode: u32) -> ItemKey {
         show: Some("Show".into()),
         season: Some(season),
         episode: Some(episode),
+        position: None,
     }
 }
 
@@ -23,6 +24,15 @@ pub fn clip(id: &str, path: &str) -> ItemKey {
         show: None,
         season: None,
         episode: None,
+        position: None,
+    }
+}
+
+/// `item` at list position `position`, for the `listed` rule.
+pub fn at(position: u32, item: ItemKey) -> ItemKey {
+    ItemKey {
+        position: Some(position),
+        ..item
     }
 }
 
@@ -36,6 +46,7 @@ pub fn channel_entry(id: &str) -> ItemKey {
         show: None,
         season: None,
         episode: None,
+        position: None,
     }
 }
 
@@ -49,7 +60,7 @@ pub fn show(seasons: u32, per_season: u32) -> Vec<ItemKey> {
 /// Every rule the engine supports.
 pub fn all_rules() -> Vec<Rule> {
     let orders = [Order::Ordered, Order::Shuffled];
-    let mut rules = vec![Rule::Ordered, Rule::Shuffled];
+    let mut rules = vec![Rule::Ordered, Rule::Listed, Rule::Shuffled];
     for by in [GroupBy::Season, GroupBy::Folder] {
         for groups in orders {
             for within in orders {
