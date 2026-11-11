@@ -1648,7 +1648,6 @@ dependencies = [
  "marathon-server",
  "raw-window-handle",
  "tempfile",
- "tokio",
  "tracing",
  "tracing-subscriber",
  "winit",
