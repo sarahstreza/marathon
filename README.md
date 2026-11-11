@@ -9,8 +9,8 @@ it run and it keeps going.
 and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
 overlay), M3.5 (seams: pluggable input, `Action`/`Event` control plane,
 skipping unplayable items, windowing kept at the edge), and M4 (embedded
-mode: the desktop client runs its own server) are implemented and awaiting
-their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
+mode: the desktop client runs its own server), and M5 (on-screen overlay,
+mouse, and gamepad) are implemented and awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -40,12 +40,14 @@ Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 ## Development
 
 Requires Rust stable (edition 2024, 1.95 or newer) and libmpv with its
-headers and `pkg-config` file (client API 2.0+, i.e. mpv 0.35 or newer):
+headers and `pkg-config` file (client API 2.0+, i.e. mpv 0.35 or newer).
+On Linux, gamepad support also needs libudev's headers (or build the
+desktop app with `--no-default-features` to leave gamepads out):
 
-| Platform | Package |
+| Platform | Packages |
 |---|---|
-| Fedora (incl. a toolbox/distrobox on Silverblue, Bazzite, ...) | `sudo dnf install mpv-devel` |
-| Debian / Ubuntu | `sudo apt install libmpv-dev` |
+| Fedora (incl. a toolbox/distrobox on Silverblue, Bazzite, ...) | `sudo dnf install mpv-devel systemd-devel` |
+| Debian / Ubuntu | `sudo apt install libmpv-dev libudev-dev` |
 | macOS | `brew install mpv pkgconf` |
 
 Every change must pass:
@@ -57,8 +59,8 @@ cargo test --workspace
 ```
 
 CI runs these on Linux and macOS (`.github/workflows/ci.yml`), plus
-`scripts/check-seams.sh`, which checks that `winit`/`glutin` stay inside
-`apps/marathon-desktop/src/platform/` and out of `marathon-client`.
+`scripts/check-seams.sh`, which checks that `winit`/`glutin`/`gilrs` stay
+inside `apps/marathon-desktop/src/platform/` and out of `marathon-client`.
 
 ### Running the server
 
@@ -103,27 +105,35 @@ sets a `token`, the app sends it. Embedded mode and a standalone
 `http://127.0.0.1:7878`, `--token` (or `MARATHON_TOKEN`) supplies a bearer
 token, and `--channel N` picks the starting channel; by default it resumes
 the channel this client watched last. Without `--windowed` it starts
-fullscreen. There is no on-screen UI yet: channel changes, `I`, and the
-guide go to the log. Set `RUST_LOG=info,mpv=debug` to see mpv's own log.
+fullscreen. Set `RUST_LOG=info,mpv=debug` to see mpv's own log.
 
-| Key | Does |
-|---|---|
-| PgUp / PgDn | Channel up / down |
-| Up / Down | Channel up / down; in the guide, move the highlight |
-| Left / Right | Seek −10s / +10s (nothing in the guide) |
-| Enter | In the guide, tune to the highlighted channel; otherwise show info |
-| digits, then Enter or a pause | Go to channel number |
-| Space | Pause / resume |
-| N / P | Next / previous item |
-| S | Cycle subtitles (on/off with one track) |
-| F | Toggle fullscreen |
-| I | Log what is playing |
-| G / Esc | Open (logs the channel list) / close the guide |
-| Q | Quit (saves the position) |
+On screen, a channel banner (number, name, item, progress) appears as soon
+as a channel switch starts, and for a few seconds on info. The guide lists
+every channel and what it is on. Errors show briefly in the top right. The
+mouse cursor hides after 3s without mouse activity.
+
+| Key | Gamepad | Mouse | Does |
+|---|---|---|---|
+| PgUp / PgDn | Right / left shoulder | Wheel up / down | Channel up / down |
+| Up / Down | D-pad up / down | | Channel up / down; in the guide, move the highlight |
+| Left / Right | D-pad left / right | | Seek −10s / +10s (nothing in the guide) |
+| Enter | A (South) | Click | In the guide, tune to the highlighted channel; otherwise show info |
+| digits, then Enter or a pause | | | Go to channel number |
+| Space | Start | | Pause / resume |
+| N / P | Right / left trigger | | Next / previous item |
+| S | X (West) | | Cycle subtitles (on/off with one track) |
+| F | Left stick click | | Toggle fullscreen |
+| I | Select (Back/View) | | Show the banner |
+| G | Y (North) | | Open / close the guide |
+| Esc | B (East) | | Close the guide (or the banner) |
+| Q | Mode (Xbox/PS button) | | Quit (saves the position) |
+
+Controllers can be plugged in and out while the app runs. Holding
+Left/Right (key or D-pad) keeps seeking.
 
 Items that cannot be played (e.g. a file renamed after the last scan) are
-skipped with a warning; after five failures in a row the client stops
-trying until you change channel or press N.
+skipped with an on-screen message; after five failures in a row the
+client stops trying until you change channel or press N.
 
 The client stores only a random client ID, in `marathon/client-id` under
 the user's config directory (`~/.config` on Linux).
