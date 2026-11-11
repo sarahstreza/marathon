@@ -1,0 +1,17 @@
+# Files the generator must not write. Patterns are matched against paths
+# under its output dir; `**/` matches any directory prefix.
+#
+# Action and Event are internally tagged enums (`oneOf` + discriminator),
+# which the Kotlin generator flattens into one data class with every
+# variant's fields. :core defines them by hand as sealed interfaces and
+# tests them against the Rust JSON fixtures instead (docs/ANDROID.md).
+# ControlApi is the only API that uses them; the client talks to
+# /clients/connect over its own WebSocket (marathon.core.RemoteSource).
+**/models/Action.kt
+**/models/ActionOneOf*.kt
+**/models/ActionAccepted.kt
+**/models/Direction.kt
+**/models/Event.kt
+**/models/EventOneOf*.kt
+**/models/RelayedEvent.kt
+**/apis/ControlApi.kt
