@@ -13,6 +13,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 
 use common::TestEnv;
+use marathon_server::config::Entry;
 use marathon_server::embedded::{EMBEDDED_BIND, EmbeddedError, EmbeddedServer};
 use marathon_server::{DATABASE_FILE, StartError};
 
@@ -176,7 +177,10 @@ fn dropping_the_server_shuts_it_down() {
 fn a_bad_config_fails_to_start_with_the_reason() {
     let env = TestEnv::new();
     let mut config = env.config();
-    config.channels[0].items[0].source = "nowhere".into();
+    let Some(Entry::Items(selector)) = config.channels[0].items.get_mut(0) else {
+        panic!("the test config's first entry is a selector");
+    };
+    selector.source = "nowhere".into();
     let err = EmbeddedServer::start(config).unwrap_err();
     assert!(
         matches!(err, EmbeddedError::Start(StartError::Config(_))),

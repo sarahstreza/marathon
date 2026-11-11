@@ -183,7 +183,7 @@ pub async fn rebuild_membership(db: &Db, config: &Config) -> Result<(), Error> {
     let mut pairs = Vec::new();
     for channel in &config.channels {
         let mut seen = HashSet::new();
-        for selector in &channel.items {
+        for selector in channel.selectors() {
             for (item_id, source_id, path) in &items {
                 if *source_id == selector.source
                     && selector.matches(path)
@@ -193,7 +193,7 @@ pub async fn rebuild_membership(db: &Db, config: &Config) -> Result<(), Error> {
                 }
             }
         }
-        if seen.is_empty() {
+        if seen.is_empty() && channel.children().next().is_none() {
             tracing::warn!(channel = %channel.id, "channel matches no items");
         }
     }

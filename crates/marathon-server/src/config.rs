@@ -3,13 +3,17 @@
 //! Config is authoritative for source and channel definitions; the database is
 //! authoritative for playback state.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 
 use marathon_rules::Rule;
 use serde::Deserialize;
+
+/// How deep channels may nest (PLAN.md M11): the most parent → child steps
+/// from any channel down to a channel with no children.
+pub const MAX_NESTING_DEPTH: usize = 8;
 
 /// Errors from loading a config file.
 #[derive(Debug, thiserror::Error)]
@@ -71,8 +75,12 @@ impl Config {
     ///
     /// - a token is set (and non-empty) unless `bind` is a loopback address;
     /// - source IDs, channel IDs, and channel numbers are unique;
+    /// - every channel that is not hidden has a number;
     /// - every channel item selector names a configured source and a relative
-    ///   path that stays inside it (no `..`).
+    ///   path that stays inside it (no `..`);
+    /// - every child channel entry names a configured channel, at most once
+    ///   per parent, and channels nest without cycles and no deeper than
+    ///   [`MAX_NESTING_DEPTH`] (PLAN.md M11).
     pub fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |msg: String| Err(ConfigError::Invalid(msg));
 
@@ -113,18 +121,33 @@ impl Config {
         let mut numbers = HashSet::new();
         for channel in &self.channels {
             if channel.id.is_empty() {
-                return invalid(format!("channel {} has an empty id", channel.number));
+                return invalid(format!(
+                    "channel {:?} has an empty id",
+                    channel
+                        .number
+                        .map_or(channel.name.clone(), |n| n.to_string())
+                ));
             }
             if !channel_ids.insert(&channel.id) {
                 return invalid(format!("duplicate channel id {:?}", channel.id));
             }
-            if !numbers.insert(channel.number) {
-                return invalid(format!(
-                    "channel number {} is used by more than one channel",
-                    channel.number
-                ));
+            match channel.number {
+                Some(number) if !numbers.insert(number) => {
+                    return invalid(format!(
+                        "channel number {number} is used by more than one channel"
+                    ));
+                }
+                Some(_) => {}
+                None if !channel.hidden => {
+                    return invalid(format!(
+                        "channel {:?} has no number; give it one, or set hidden = true \
+                         if it is only meant to be part of other channels",
+                        channel.id
+                    ));
+                }
+                None => {}
             }
-            for selector in &channel.items {
+            for selector in channel.selectors() {
                 if !source_ids.contains(selector.source.as_str()) {
                     return invalid(format!(
                         "channel {:?} uses unknown source {:?}",
@@ -141,8 +164,108 @@ impl Config {
                 }
             }
         }
+        self.validate_nesting()
+    }
+
+    /// Checks child channel references: each names a known channel, at
+    /// most once per parent, with no cycles, and no deeper than
+    /// [`MAX_NESTING_DEPTH`]. Errors name the channels involved.
+    fn validate_nesting(&self) -> Result<(), ConfigError> {
+        let by_id: HashMap<&str, &ChannelConfig> =
+            self.channels.iter().map(|c| (c.id.as_str(), c)).collect();
+        for channel in &self.channels {
+            let mut seen = HashSet::new();
+            for child in channel.children() {
+                if !by_id.contains_key(child.channel.as_str()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "channel {:?} contains channel {:?}, which is not configured",
+                        channel.id, child.channel
+                    )));
+                }
+                if !seen.insert(child.channel.as_str()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "channel {:?} lists channel {:?} more than once",
+                        channel.id, child.channel
+                    )));
+                }
+            }
+        }
+
+        // Depth-first search from every channel, keeping the current chain
+        // so a cycle or an over-deep chain can be reported in full. `depth`
+        // memoises the longest chain below each finished channel, keeping
+        // this linear in the size of the graph.
+        fn visit<'a>(
+            id: &'a str,
+            by_id: &HashMap<&'a str, &'a ChannelConfig>,
+            chain: &mut Vec<&'a str>,
+            depth: &mut HashMap<&'a str, usize>,
+        ) -> Result<usize, ConfigError> {
+            if let Some(d) = depth.get(id) {
+                return Ok(*d);
+            }
+            if let Some(start) = chain.iter().position(|c| *c == id) {
+                let mut cycle: Vec<&str> = chain[start..].to_vec();
+                cycle.push(id);
+                return Err(ConfigError::Invalid(if cycle.len() == 2 {
+                    format!("channel {id:?} contains itself")
+                } else {
+                    format!(
+                        "channels contain each other in a cycle: {}",
+                        describe_chain(&cycle)
+                    )
+                }));
+            }
+            chain.push(id);
+            let mut deepest = 0;
+            if let Some(channel) = by_id.get(id) {
+                for child in channel.children() {
+                    let below = visit(child.channel.as_str(), by_id, chain, depth)?;
+                    deepest = deepest.max(below + 1);
+                }
+            }
+            if deepest > MAX_NESTING_DEPTH {
+                // Report the chain from here down the deepest path.
+                let mut path = vec![id];
+                let mut at = id;
+                while let Some(next) = by_id.get(at).and_then(|c| {
+                    c.children()
+                        .map(|child| child.channel.as_str())
+                        .max_by_key(|child| depth.get(child).copied().unwrap_or(0))
+                }) {
+                    path.push(next);
+                    at = next;
+                }
+                return Err(ConfigError::Invalid(format!(
+                    "channels nest {deepest} levels deep, more than the limit of \
+                     {MAX_NESTING_DEPTH}: {}",
+                    describe_chain(&path)
+                )));
+            }
+            chain.pop();
+            depth.insert(id, deepest);
+            Ok(deepest)
+        }
+
+        let mut depth = HashMap::new();
+        for channel in &self.channels {
+            visit(channel.id.as_str(), &by_id, &mut Vec::new(), &mut depth)?;
+        }
         Ok(())
     }
+
+    /// The configured channel with ID `id`.
+    pub fn channel(&self, id: &str) -> Option<&ChannelConfig> {
+        self.channels.iter().find(|c| c.id == id)
+    }
+}
+
+/// `"a" → "b" → "c"`.
+fn describe_chain(ids: &[&str]) -> String {
+    ids.iter()
+        .map(|id| format!("{id:?}"))
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 /// Checks a Jellyfin server URL: plain `http(s)://host[:port][/path]`, with
@@ -273,10 +396,127 @@ impl fmt::Debug for Secret {
 #[serde(deny_unknown_fields)]
 pub struct ChannelConfig {
     pub id: String,
-    pub number: u32,
+    /// The channel number. Only hidden channels may go without.
+    #[serde(default)]
+    pub number: Option<u32>,
     pub name: String,
-    pub items: Vec<ItemSelector>,
+    /// What the channel plays: item selectors and child channels.
+    pub items: Vec<Entry>,
     pub rule: Rule,
+    /// Whether this channel shares its child channels' playback state or
+    /// keeps its own (PLAN.md M11). Irrelevant without child channels.
+    #[serde(default)]
+    pub state: StateMode,
+    /// Hidden channels are left out of the guide and channel up/down and
+    /// can go without a number; they can still be tuned by ID, and be
+    /// child channels of others.
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+impl ChannelConfig {
+    /// The channel's item selectors.
+    pub fn selectors(&self) -> impl Iterator<Item = &ItemSelector> {
+        self.items.iter().filter_map(|entry| match entry {
+            Entry::Items(selector) => Some(selector),
+            Entry::Channel(_) => None,
+        })
+    }
+
+    /// The channel's child channel entries.
+    pub fn children(&self) -> impl Iterator<Item = &ChildEntry> {
+        self.items.iter().filter_map(|entry| match entry {
+            Entry::Channel(child) => Some(child),
+            Entry::Items(_) => None,
+        })
+    }
+}
+
+/// How a channel with child channels treats their playback state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StateMode {
+    /// The parent plays each child from the child's own state, and moves it
+    /// along: watching through the parent or tuning the child directly is
+    /// the same playback position.
+    #[default]
+    Shared,
+    /// The parent keeps its own position in each child, in its own state,
+    /// and never reads or writes the child's.
+    Independent,
+}
+
+/// One entry of a channel's `items`: either an item selector or a child
+/// channel.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "RawEntry")]
+pub enum Entry {
+    /// `{ source = "nas", path = "TV/Show", recursive = false, weight = 1 }`
+    Items(ItemSelector),
+    /// `{ channel = "other-channel", weight = 1 }`
+    Channel(ChildEntry),
+}
+
+/// A child channel entry: the parent's rule picks it like an item, and it
+/// plays whatever the child channel is on (PLAN.md M11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildEntry {
+    /// ID of the child channel.
+    pub channel: String,
+    /// Weight for a `weighted` rule with `by = "manual"`; default 1.
+    pub weight: Option<u64>,
+}
+
+/// Every key an entry may have, so that a mistake gets an error naming
+/// what is wrong rather than serde's "did not match any variant".
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEntry {
+    source: Option<String>,
+    path: Option<PathBuf>,
+    recursive: Option<bool>,
+    channel: Option<String>,
+    weight: Option<u64>,
+}
+
+impl TryFrom<RawEntry> for Entry {
+    type Error = String;
+
+    fn try_from(raw: RawEntry) -> Result<Self, String> {
+        match raw {
+            RawEntry {
+                channel: Some(channel),
+                source: None,
+                path: None,
+                recursive: None,
+                weight,
+            } => Ok(Entry::Channel(ChildEntry { channel, weight })),
+            RawEntry {
+                channel: Some(channel),
+                ..
+            } => Err(format!(
+                "the entry for channel {channel:?} must not also have source, path, or \
+                 recursive; list the channel and the items as separate entries"
+            )),
+            RawEntry {
+                source: Some(source),
+                path: Some(path),
+                recursive,
+                weight,
+                channel: None,
+            } => Ok(Entry::Items(ItemSelector {
+                source,
+                path,
+                recursive: recursive.unwrap_or(false),
+                weight,
+            })),
+            _ => Err(
+                "an entry needs either `channel = \"<channel id>\"`, or both \
+                      `source` and `path`"
+                    .to_owned(),
+            ),
+        }
+    }
 }
 
 /// Selects items for a channel: a path within a source.
@@ -300,6 +540,11 @@ pub struct ItemSelector {
     /// Whether to include items in all subdirectories of `path`.
     #[serde(default)]
     pub recursive: bool,
+    /// Weight of each item selected, for a `weighted` rule with
+    /// `by = "manual"`; default 1. (To weigh a whole folder as one entry,
+    /// make it a hidden channel and use that as a child channel.)
+    #[serde(default)]
+    pub weight: Option<u64>,
 }
 
 impl ItemSelector {
@@ -504,11 +749,170 @@ mod tests {
         }
     }
 
+    /// A channel line for `with_channels`: `items` is the TOML inside
+    /// `items = [...]`.
+    fn channel(id: &str, number: Option<u32>, items: &str, extra: &str) -> String {
+        let number = number.map_or(String::new(), |n| format!("number = {n}\n"));
+        format!(
+            "[[channel]]\nid = \"{id}\"\n{number}name = \"{id}\"\nitems = [{items}]\n\
+             rule = {{ kind = \"ordered\" }}\n{extra}\n"
+        )
+    }
+
+    fn parent(id: &str, number: u32, children: &[&str]) -> String {
+        let items = children
+            .iter()
+            .map(|c| format!("{{ channel = \"{c}\" }}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        channel(id, Some(number), &items, "")
+    }
+
+    const LEAF_ITEMS: &str = r#"{ source = "nas", path = "a" }"#;
+
+    #[test]
+    fn parses_nested_channels() {
+        let toml = with_channels(
+            r#"
+            [[channel]]
+            id = "essayists"
+            number = 10
+            name = "Video Essayists"
+            items = [
+              { channel = "contrapoints", weight = 3 },
+              { source = "nas", path = "YouTube/Misc Essays", recursive = true },
+            ]
+            rule = { kind = "weighted", by = "manual" }
+            state = "independent"
+
+            [[channel]]
+            id = "contrapoints"
+            name = "Contrapoints"
+            hidden = true
+            items = [{ source = "nas", path = "YouTube/Contrapoints" }]
+            rule = { kind = "ordered" }
+            "#,
+        );
+        let config = Config::from_toml_str(&toml).unwrap();
+        config.validate().unwrap();
+        let essayists = &config.channels[0];
+        assert_eq!(essayists.state, StateMode::Independent);
+        assert_eq!(
+            essayists.children().collect::<Vec<_>>(),
+            [&ChildEntry {
+                channel: "contrapoints".into(),
+                weight: Some(3)
+            }]
+        );
+        assert_eq!(essayists.selectors().count(), 1);
+        let contrapoints = &config.channels[1];
+        assert!(contrapoints.hidden);
+        assert_eq!(contrapoints.number, None);
+        assert_eq!(contrapoints.state, StateMode::Shared);
+    }
+
+    #[test]
+    fn rejects_malformed_entries() {
+        for (items, why) in [
+            (r#"{ channel = "b", source = "nas" }"#, "must not also have"),
+            (r#"{ source = "nas" }"#, "needs either"),
+            (r#"{ path = "a" }"#, "needs either"),
+            (r#"{ channel = "b", wieght = 2 }"#, "unknown field"),
+        ] {
+            let toml = with_channels(&channel("a", Some(1), items, ""));
+            let err = Config::from_toml_str(&toml).unwrap_err();
+            let ConfigError::Parse { source, .. } = &err else {
+                panic!("{items}: {err:?}");
+            };
+            assert!(source.to_string().contains(why), "{items}: {source}");
+        }
+    }
+
+    #[test]
+    fn visible_channels_need_numbers() {
+        let err = validate(&with_channels(&channel("a", None, LEAF_ITEMS, ""))).unwrap_err();
+        assert!(err.contains("\"a\" has no number"), "{err}");
+        validate(&with_channels(&channel(
+            "a",
+            None,
+            LEAF_ITEMS,
+            "hidden = true",
+        )))
+        .unwrap();
+        // Hidden channels may have numbers too, which must still be unique.
+        let both = channel("a", Some(1), LEAF_ITEMS, "hidden = true")
+            + &channel("b", Some(1), LEAF_ITEMS, "");
+        assert!(
+            validate(&with_channels(&both))
+                .unwrap_err()
+                .contains("number 1")
+        );
+    }
+
+    #[test]
+    fn rejects_a_channel_that_contains_itself() {
+        let err = validate(&with_channels(&parent("a", 1, &["a"]))).unwrap_err();
+        assert!(err.contains("channel \"a\" contains itself"), "{err}");
+    }
+
+    #[test]
+    fn rejects_an_indirect_cycle_naming_every_channel() {
+        let toml = parent("a", 1, &["b"]) + &parent("b", 2, &["c"]) + &parent("c", 3, &["a"]);
+        let err = validate(&with_channels(&toml)).unwrap_err();
+        assert!(err.contains("\"a\" → \"b\" → \"c\" → \"a\""), "{err}");
+    }
+
+    #[test]
+    fn rejects_unknown_and_repeated_children() {
+        let err = validate(&with_channels(&parent("a", 1, &["ghost"]))).unwrap_err();
+        assert!(
+            err.contains("\"a\" contains channel \"ghost\", which is not configured"),
+            "{err}"
+        );
+        let toml = parent("a", 1, &["b", "b"]) + &channel("b", Some(2), LEAF_ITEMS, "");
+        let err = validate(&with_channels(&toml)).unwrap_err();
+        assert!(err.contains("lists channel \"b\" more than once"), "{err}");
+    }
+
+    /// `levels` parent → child steps: c0 → c1 → … → c{levels}.
+    fn chain(levels: usize) -> String {
+        let mut toml = String::new();
+        for i in 0..levels {
+            toml += &parent(&format!("c{i}"), i as u32 + 1, &[&format!("c{}", i + 1)]);
+        }
+        toml + &channel(&format!("c{levels}"), Some(100), LEAF_ITEMS, "")
+    }
+
+    #[test]
+    fn nesting_depth_is_limited() {
+        validate(&with_channels(&chain(MAX_NESTING_DEPTH))).unwrap();
+        let err = validate(&with_channels(&chain(MAX_NESTING_DEPTH + 1))).unwrap_err();
+        assert!(
+            err.contains("9 levels deep, more than the limit of 8"),
+            "{err}"
+        );
+        assert!(
+            err.contains("\"c0\" → \"c1\" → \"c2\" → \"c3\" → \"c4\" → \"c5\" → \"c6\" → \"c7\" → \"c8\" → \"c9\""),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_diamond() {
+        // Two parents sharing a child, and a grandparent over both.
+        let toml = parent("top", 1, &["left", "right"])
+            + &parent("left", 2, &["shared"])
+            + &parent("right", 3, &["shared"])
+            + &channel("shared", None, LEAF_ITEMS, "hidden = true");
+        validate(&with_channels(&toml)).unwrap();
+    }
+
     fn selector(path: &str, recursive: bool) -> ItemSelector {
         ItemSelector {
             source: "nas".to_owned(),
             path: path.into(),
             recursive,
+            weight: None,
         }
     }
 

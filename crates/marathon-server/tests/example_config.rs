@@ -26,7 +26,7 @@ fn example_config_parses() {
     assert_eq!(ids, ["office", "taskmaster", "essays"]);
 
     let taskmaster = &config.channels[1];
-    assert_eq!(taskmaster.number, 6);
+    assert_eq!(taskmaster.number, Some(6));
     assert_eq!(
         taskmaster.rule,
         Rule::Grouped {
@@ -39,19 +39,14 @@ fn example_config_parses() {
     let essays = &config.channels[2];
     assert_eq!(essays.rule, Rule::Shuffled);
     assert_eq!(essays.items.len(), 2);
-    assert!(
-        essays
-            .items
-            .iter()
-            .all(|s| s.recursive && s.source == "nas")
-    );
+    assert!(essays.selectors().all(|s| s.recursive && s.source == "nas"));
 }
 
 #[test]
 fn every_channel_references_a_configured_source() {
     let config = Config::load(example_path()).unwrap();
     for channel in &config.channels {
-        for selector in &channel.items {
+        for selector in channel.selectors() {
             assert!(
                 config.sources.iter().any(|s| s.id() == selector.source),
                 "channel {} references unknown source {}",
