@@ -66,3 +66,61 @@ async fn serves_over_a_real_port_and_shuts_down() {
     let again = Server::bind(env.config()).await.unwrap();
     drop(again);
 }
+
+/// A player streaming a long video keeps its connection open, and graceful
+/// shutdown would wait for it forever. The server gives such connections
+/// a grace period and then closes them, so quitting (or an embedded
+/// server stopping) never hangs.
+#[tokio::test]
+async fn shutdown_does_not_wait_forever_for_an_open_stream() {
+    let env = TestEnv::new();
+    // Big enough that the response cannot fit in the socket buffers.
+    let misc = env
+        .library()
+        .join("Misc/Café Society's Ünïcode Clip — Ørsted.mkv");
+    std::fs::File::options()
+        .write(true)
+        .open(&misc)
+        .unwrap()
+        .set_len(256 * 1024 * 1024)
+        .unwrap();
+    let server = Server::bind(env.config())
+        .await
+        .unwrap()
+        .shutdown_grace(Duration::from_millis(200));
+    let addr = server.local_addr();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(server.serve(async {
+        let _ = stopped.await;
+    }));
+
+    let now = raw_request(
+        addr,
+        "GET /api/v1/channels/misc/now HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let body = now.split("\r\n\r\n").nth(1).unwrap();
+    let now: serde_json::Value = serde_json::from_str(body).unwrap();
+    let id = now["item"]["id"].as_str().unwrap();
+
+    // Start streaming, read a little, and then stall like a paused player.
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!("GET /api/v1/stream/{id} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert!(buf[..n].starts_with(b"HTTP/1.1 200"));
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("server stops after the grace period despite the open stream")
+        .unwrap()
+        .unwrap();
+    assert!(TcpStream::connect(addr).await.is_err());
+    drop(stream);
+}
