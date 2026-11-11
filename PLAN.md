@@ -132,7 +132,7 @@ Get these right before anything else; every component depends on them.
 | Logging | `tracing`, `tracing-subscriber` | |
 | Errors | `thiserror` in libraries, `anyhow` in binaries | |
 | Windowing / GL | `winit` + `glutin` + `glow` | One window, one GL context |
-| Video | libmpv, OpenGL render API | `libmpv2` crate if it supports the render API cleanly at current versions; otherwise thin `bindgen` bindings in `marathon-mpv` (the needed surface is small) |
+| Video | libmpv, OpenGL render API | Thin hand-written bindings in `marathon-mpv`, linked via `pkg-config` (chosen over `libmpv2` in M3; see §12) |
 | Overlay UI | `egui` via `egui_glow` | Drawn over the video each frame; isolated behind a module so it can be replaced |
 | Gamepad | `gilrs` | |
 | HDMI-CEC | libcec via `cec-rs` | Covers Raspberry Pi, the Linux kernel CEC framework, and Pulse-Eight USB adapters |
@@ -302,7 +302,7 @@ via `http-header-fields`).
 | GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch |
 | POST | `/channels/{id}/progress` | `{item_id, position_ms, duration_ms?, paused}` |
 | POST | `/channels/{id}/advance` | `{from_item_id, reason: "ended" \| "skipped"}` → new `now`. **Idempotent:** if `from_item_id` is not the channel's current item, return the current `now` without advancing |
-| POST | `/channels/{id}/previous` | Step back via the rule's `previous` |
+| POST | `/channels/{id}/previous` | `{from_item_id}` → new `now`. Step back via the rule's `previous`; idempotent like `advance` |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
@@ -387,8 +387,12 @@ relays them. Both serialize as tagged JSON with snake_case names, e.g.
 ChannelUp, ChannelDown, GoToChannel(u32), GoToChannelId(String),
 TogglePause, Play, Pause, SeekRelative(i32), NextItem, PreviousItem,
 Navigate(Up | Down | Left | Right), Select, Back,
-ShowInfo, ToggleGuide, Standby, Wake, Quit
+ShowInfo, ToggleGuide, ToggleSubtitles, ToggleFullscreen, Standby, Wake, Quit
 ```
+
+(`ToggleSubtitles` and `ToggleFullscreen` came from M3, whose manual checks
+need them. Variants with data are struct variants on the wire, e.g.
+`{"action": "seek_relative", "seconds": -10}`.)
 
 Actions are semantic, not device-shaped. The UI resolves `Navigate` by context:
 with no overlay open, Up/Down change channel and Left/Right seek; with the
@@ -420,8 +424,9 @@ anything the UI can do must also be possible through it.
 there is no modal state that an adapter could leave stuck.
 
 **MVP bindings.** Keyboard: arrows navigate (per the context rule above),
-PgUp/PgDn change channel, digits for direct entry, Enter select, Space pause,
-N/P next/previous item, I info, G guide, Esc back, Q quit. Mouse: wheel changes
+PgUp/PgDn change channel, digits for direct entry (committed on Enter or after
+1.5s), Enter select, Space pause, N/P next/previous item, I info, G guide,
+S subtitles, F fullscreen, Esc back, Q quit. Mouse: wheel changes
 channel, click selects, movement shows the cursor. Gamepad: shoulders change
 channel, D-pad navigates, A select/info, B back, Start pause. CEC: see M7.
 
@@ -815,7 +820,7 @@ system. No Windows build (keep code portable, but do not test it yet).
 | Decision | Default | Revisit when |
 |---|---|---|
 | Overlay UI toolkit | egui | If the 10-foot look needs more than egui gives easily; the overlay is isolated so it can be swapped for a custom GL renderer or another toolkit |
-| libmpv bindings | `libmpv2` crate if suitable, else own `bindgen` | M3 start |
+| libmpv bindings | Decided in M3: hand-written declarations in `marathon-mpv` (no `bindgen`, so no libclang). `libmpv2` was LGPL-2.1, panicked inside FFI callbacks, and allocated per frame; the needed surface is ~20 functions | If the needed surface grows a lot |
 | Progress report interval | 5s | If DB growth matters |
 | Finished threshold | `max(30s, 2%)` from end | After living with it; credits vary |
 | Resume rewind | 5s | Personal taste |
