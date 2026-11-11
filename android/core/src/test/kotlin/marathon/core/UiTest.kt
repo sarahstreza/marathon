@@ -3,6 +3,7 @@
 
 package marathon.core
 
+import marathon.api.models.ChannelRef
 import marathon.api.models.ChannelSummary
 import marathon.api.models.Item
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -43,6 +44,40 @@ class UiTest {
         assertNull(banner.show)
         assertEquals("S03E14 · The Injury", banner.title)
         banner = Banner.fromSummary(summary("Parks"))
+        assertNull(banner.via)
+        assertEquals("Parks · S03E14 · The Injury", banner.itemLine())
         assertEquals("Parks", banner.show)
+    }
+
+    @Test
+    fun nested_channels_show_the_child_before_the_title() {
+        val envy = item("Contrapoints", null, null).copy(title = "Envy")
+        val summary = ChannelSummary(
+            id = "essayists",
+            itemCount = 3,
+            name = "Video Essayists",
+            number = 10,
+            positionMs = 0,
+            current = envy,
+            resolutionPath = listOf(
+                ChannelRef(id = "essayists", name = "Video Essayists"),
+                ChannelRef(id = "contrapoints", name = "Contrapoints"),
+            ),
+        )
+        val banner = Banner.fromSummary(summary)
+        assertEquals("Video Essayists", banner.channelName)
+        // The show is named like the child channel, so it is left out.
+        assertNull(banner.show)
+        assertEquals("Contrapoints", banner.via)
+        assertEquals("Video Essayists · Contrapoints: Envy", "${banner.channelName} · ${banner.itemLine()}")
+
+        val guide = Guide.of(listOf(summary), 0, null)
+        assertEquals("Contrapoints: Envy", guide.rows[0].on)
+
+        // Deeper nesting lists every child.
+        val deep = summary.copy(
+            resolutionPath = listOf(ChannelRef("a", "A"), ChannelRef("b", "B"), ChannelRef("c", "Contrapoints")),
+        )
+        assertEquals("B · Contrapoints: Envy", Banner.fromSummary(deep).itemLine())
     }
 }

@@ -217,9 +217,15 @@ class Tuner<P : Player>(
         return chosen?.let { watchable(it.channelId) }
     }
 
-    /** Re-fetches the channel list. */
+    /**
+     * Re-fetches the channel list.
+     *
+     * Hidden channels (PLAN.md M11) are left out, so channel up/down,
+     * numbers, and the guide never land on them; the server leaves them
+     * out too, unless asked.
+     */
     fun refreshChannels() {
-        channels = api.channels().sortedBy { it.number }
+        channels = api.channels().filter { it.hidden != true }.sortedBy { it.number }
     }
 
     /**
@@ -231,7 +237,7 @@ class Tuner<P : Player>(
             Action.ChannelUp -> stepChannel(1)
             Action.ChannelDown -> stepChannel(-1)
             is Action.GoToChannel -> goToChannel({ it.number == action.number }, action.number.toString())
-            is Action.GoToChannelId -> goToChannel({ it.id == action.id }, action.id)
+            is Action.GoToChannelId -> goToChannelId(action.id)
             Action.TogglePause -> setPaused(!player.isPaused())
             Action.Play -> setPaused(false)
             Action.Pause -> setPaused(true)
@@ -444,7 +450,7 @@ class Tuner<P : Player>(
         Log.info(
             "tuned in to ${now.channelNumber} ${now.channelName}: ${describe(now)} at ${formatMs(now.positionMs)}",
         )
-        emit(Event.ChannelChanged(now.channelId, now.channelNumber, now.channelName))
+        emit(Event.ChannelChanged(now.channelId, now.channelNumber, now.channelName, resolutionIds(now)))
         // A fresh choice by the viewer gets a fresh set of retries.
         failures = 0
         play(now, announce = true)
@@ -458,6 +464,7 @@ class Tuner<P : Player>(
     private fun play(first: Now, announce: Boolean) {
         var now = first
         while (true) {
+            reportWarnings(now)
             val startMs = config.resumeAt(now.positionMs)
             val failure = try {
                 player.load(LoadRequest(url = now.streamUrl, startMs = startMs, subtitles = subtitleTracks(now.item)))
@@ -471,6 +478,7 @@ class Tuner<P : Player>(
                 itemId = now.item.id,
                 title = describe(now),
                 positionMs = startMs,
+                resolutionPath = resolutionIds(now),
             )
             state = State.Playing(
                 now = now,
@@ -526,7 +534,7 @@ class Tuner<P : Player>(
         val channelId = playing.now.channelId
         val fromItemId = playing.now.item.id
         val prefetch = playing.now.next?.let { next ->
-            playing.now.copy(item = next.item, positionMs = 0, streamUrl = next.streamUrl, next = null)
+            playing.now.copy(item = next.item, positionMs = 0, streamUrl = next.streamUrl, next = null, warnings = null)
         }
         emit(Event.ItemEnded(channelId, fromItemId))
         // It played, so the failure streak is over.
@@ -557,6 +565,7 @@ class Tuner<P : Player>(
         // another client moved the channel meanwhile, in which case it may
         // also have a saved position worth resuming.
         if (preloaded?.item?.id == now.item.id && now.positionMs <= config.resumeRewindMs) {
+            reportWarnings(now)
             emit(
                 Event.NowPlaying(
                     channelId = now.channelId,
@@ -564,6 +573,7 @@ class Tuner<P : Player>(
                     itemId = now.item.id,
                     title = describe(now),
                     positionMs = 0,
+                    resolutionPath = resolutionIds(now),
                 ),
             )
             state = State.Playing(now = now, resumeFloor = null, lastReportMs = clock.nowMs())
@@ -620,6 +630,33 @@ class Tuner<P : Player>(
         tune(id)
     }
 
+    /**
+     * Tunes to a channel by ID. Unlike by number, this reaches hidden
+     * channels too, which are not in the channel list: the server is asked
+     * directly, and says if there is no such channel.
+     */
+    private fun goToChannelId(id: String) {
+        if (now()?.channelId == id) return
+        try {
+            tune(id)
+        } catch (e: ApiError) {
+            if (e.code() == ErrorCode.NOT_FOUND) throw TunerError.NoSuchChannel(id)
+            throw e
+        }
+    }
+
+    /**
+     * Reports what the server stepped past to find [now]'s item (such as a
+     * child channel with nothing to play, PLAN.md M11) as Error events. The
+     * server already caps how many it steps past in one go.
+     */
+    private fun reportWarnings(now: Now) {
+        for (message in now.warnings.orEmpty()) {
+            Log.warn("channel ${now.channelNumber}: the server skipped something: $message")
+            emit(Event.Error(message))
+        }
+    }
+
     private fun logInfo() {
         val now = now()
         if (now == null) {
@@ -638,6 +675,14 @@ private fun subtitleTracks(item: Item): List<SubtitleTrack> =
     item.subtitles.map { SubtitleTrack(url = it.url, title = it.label, language = it.language) }
 
 /** A one-line description of the current item, e.g. `Show · S03E14 · The Injury`. */
+/**
+ * The IDs of the channels [now]'s item was resolved through (PLAN.md M11),
+ * for events. A server older than nested channels sends no path; the
+ * channel itself is the whole path then.
+ */
+private fun resolutionIds(now: Now): List<String> =
+    now.resolutionPath?.takeIf { it.isNotEmpty() }?.map { it.id } ?: listOf(now.channelId)
+
 fun describe(now: Now): String {
     val item = now.item
     val parts = mutableListOf<String>()

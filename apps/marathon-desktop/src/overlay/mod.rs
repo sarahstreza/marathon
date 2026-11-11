@@ -270,6 +270,7 @@ mod tests {
             channel_name: format!("Channel {n}"),
             title: Some("S01E01 · Pilot".into()),
             show: None,
+            via: None,
         }
     }
 

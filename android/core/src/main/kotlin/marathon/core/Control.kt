@@ -116,6 +116,12 @@ sealed interface Event {
         val title: String,
         /** Where playback started within the item. */
         @SerialName("position_ms") val positionMs: Long,
+        /**
+         * The channels the item was resolved through (nested channels,
+         * PLAN.md M11): [channelId] first, ending with the channel the item
+         * belongs to.
+         */
+        @SerialName("resolution_path") val resolutionPath: List<String> = emptyList(),
     ) : Event
 
     /** The client tuned to a different channel. */
@@ -125,6 +131,8 @@ sealed interface Event {
         @SerialName("channel_id") val channelId: String,
         @SerialName("channel_number") val channelNumber: Int,
         @SerialName("channel_name") val channelName: String,
+        /** As for [NowPlaying]. */
+        @SerialName("resolution_path") val resolutionPath: List<String> = emptyList(),
     ) : Event
 
     @Serializable

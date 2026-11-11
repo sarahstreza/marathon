@@ -111,6 +111,8 @@ mod tests {
                 item_count: 1,
                 current: None,
                 position_ms: 0,
+                hidden: false,
+                resolution_path: Vec::new(),
             })
             .collect()
     }

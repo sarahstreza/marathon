@@ -334,8 +334,13 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
     }
 
     /// Re-fetches the channel list.
+    ///
+    /// Hidden channels (PLAN.md M11) are left out, so channel up/down,
+    /// numbers, and the guide never land on them; the server leaves them
+    /// out too, unless asked.
     pub fn refresh_channels(&mut self) -> Result<(), TunerError> {
         let mut channels = self.api.channels()?;
+        channels.retain(|c| !c.hidden);
         channels.sort_by_key(|c| c.number);
         self.channels = channels;
         Ok(())
@@ -350,9 +355,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             Action::GoToChannel { number } => {
                 self.go_to_channel(|c| c.number == number, || number.to_string())?
             }
-            Action::GoToChannelId { id } => {
-                self.go_to_channel(|c| c.id == id, || id.clone())?;
-            }
+            Action::GoToChannelId { id } => self.go_to_channel_id(&id)?,
             Action::TogglePause => {
                 let paused = !self.player.is_paused();
                 self.set_paused(paused);
@@ -626,6 +629,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             channel_id: now.channel_id.clone(),
             channel_number: now.channel_number,
             channel_name: now.channel_name.clone(),
+            resolution_path: resolution_ids(&now),
         });
         // A fresh choice by the viewer gets a fresh set of retries.
         self.failures = 0;
@@ -637,6 +641,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
     /// `announce` says whether the overlay should show the banner for it.
     fn play(&mut self, mut now: Now, announce: bool) -> Result<(), TunerError> {
         loop {
+            self.report_warnings(&now);
             let start_ms = self.config.resume_at(now.position_ms);
             let loaded = self.player.load(&LoadRequest {
                 url: now.stream_url.clone(),
@@ -649,6 +654,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 item_id: now.item.id.clone(),
                 title: describe(&now),
                 position_ms: start_ms,
+                resolution_path: resolution_ids(&now),
             };
             self.state = State::Playing(Box::new(Playing {
                 resume_floor: (now.position_ms > start_ms).then_some(now.position_ms),
@@ -668,6 +674,18 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                     None => return Ok(()),
                 },
             }
+        }
+    }
+
+    /// Reports what the server stepped past to find `now`'s item (such as a
+    /// child channel with nothing to play, PLAN.md M11) as `Error` events.
+    /// The server already caps how many it steps past in one go.
+    fn report_warnings(&mut self, now: &Now) {
+        for message in &now.warnings {
+            tracing::warn!(channel = now.channel_number, %message, "server skipped something");
+            self.emit(Event::Error {
+                message: message.clone(),
+            });
         }
     }
 
@@ -735,6 +753,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             position_ms: 0,
             stream_url: next.stream_url.clone(),
             next: None,
+            warnings: Vec::new(),
             ..playing.now.clone()
         });
         self.emit(ended);
@@ -791,12 +810,14 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         if preloaded.map(|n| n.item.id).as_ref() == Some(&now.item.id)
             && now.position_ms <= rewind_ms
         {
+            self.report_warnings(&now);
             self.emit(Event::NowPlaying {
                 channel_id: now.channel_id.clone(),
                 channel_number: now.channel_number,
                 item_id: now.item.id.clone(),
                 title: describe(&now),
                 position_ms: 0,
+                resolution_path: resolution_ids(&now),
             });
             self.state = State::Playing(Box::new(Playing {
                 now,
@@ -890,6 +911,21 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         self.tune(&id)
     }
 
+    /// Tunes to a channel by ID. Unlike by number, this reaches hidden
+    /// channels too, which are not in the channel list: the server is asked
+    /// directly, and says if there is no such channel.
+    fn go_to_channel_id(&mut self, id: &str) -> Result<(), TunerError> {
+        if self.now().map(|n| n.channel_id.as_str()) == Some(id) {
+            return Ok(());
+        }
+        match self.tune(id) {
+            Err(TunerError::Api(err)) if err.code() == Some(ErrorCode::NotFound) => {
+                Err(TunerError::NoSuchChannel(id.to_owned()))
+            }
+            result => result,
+        }
+    }
+
     fn log_info(&self) {
         match self.now() {
             Some(now) => tracing::info!(
@@ -925,6 +961,17 @@ fn subtitle_tracks(item: &marathon_api::Item) -> Vec<SubtitleTrack> {
 
 /// A one-line description of the current item, e.g.
 /// `Show · S03E14 · The Injury`.
+/// The IDs of the channels `now`'s item was resolved through (PLAN.md
+/// M11), for events. A server older than nested channels sends no path;
+/// the channel itself is the whole path then.
+fn resolution_ids(now: &Now) -> Vec<String> {
+    if now.resolution_path.is_empty() {
+        vec![now.channel_id.clone()]
+    } else {
+        now.resolution_path.iter().map(|c| c.id.clone()).collect()
+    }
+}
+
 pub fn describe(now: &Now) -> String {
     let item = &now.item;
     let mut parts = Vec::new();

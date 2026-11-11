@@ -262,6 +262,7 @@ impl Client {
                 channel_number,
                 item_id,
                 title,
+                resolution_path,
                 ..
             } => {
                 self.playing = Some(ClientPlaying {
@@ -269,6 +270,7 @@ impl Client {
                     channel_number: *channel_number,
                     item_id: item_id.clone(),
                     title: title.clone(),
+                    resolution_path: resolution_path.clone(),
                 });
                 self.paused = false;
                 self.standby = false;
@@ -301,6 +303,7 @@ mod tests {
             item_id: item.into(),
             title: "T".into(),
             position_ms: 0,
+            resolution_path: vec!["c".into()],
         }
     }
 

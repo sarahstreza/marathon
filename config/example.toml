@@ -60,3 +60,37 @@ items = [
   { source = "nas", path = "YouTube/Level Design", recursive = true },
 ]
 rule = { kind = "shuffled" }
+
+# A channel made of other channels (and items). Its rule picks among the
+# entries; a child channel entry plays whatever that channel is on. With
+# state = "shared" (the default), watching Contrapoints here or on its own
+# is one position; "independent" keeps a separate position for each child.
+# `weighted` picks entries in proportion to `weight` (by = "manual"), to how
+# many items each holds ("item_count"), or to their total "duration".
+[[channel]]
+id = "essayists"
+number = 10
+name = "Video Essayists"
+items = [
+  { channel = "contrapoints", weight = 2 },
+  { channel = "folding-ideas" },
+  { source = "nas", path = "YouTube/Misc Essays", recursive = true },
+]
+rule = { kind = "weighted", by = "manual" }
+state = "shared"
+
+# Hidden channels need no number and stay out of the guide and channel
+# up/down, but can still be tuned by ID and used as child channels.
+[[channel]]
+id = "contrapoints"
+name = "Contrapoints"
+hidden = true
+items = [{ source = "nas", path = "YouTube/Contrapoints" }]
+rule = { kind = "ordered" }
+
+[[channel]]
+id = "folding-ideas"
+name = "Folding Ideas"
+hidden = true
+items = [{ source = "nas", path = "YouTube/Folding Ideas" }]
+rule = { kind = "ordered" }

@@ -10,6 +10,7 @@
 #   <dir>/TV/Test Show/Season N/Test Show - SxxEyy - Title.mkv   3 seasons x 4
 #   <dir>/TV/Test Show/Season 1/Test Show - S01E01 - Pilot.en.srt  sidecar subs
 #   <dir>/Essays/...                                              6 loosely named clips
+#   <dir>/Essayists/{Alpha,Beta}/...                              3 clips per "creator"
 #   <dir>/Misc/Café Society's Ünïcode Clip.mkv                    awkward filename
 #   <dir>/marathon.toml                                           server config for this library
 #
@@ -136,6 +137,15 @@ make_clip "Essays/The Art of the Tutorial [1080p].mkv" 720
 make_clip "Essays/level-design-101.mp4" 740
 make_clip "Essays/2019-03-14 Camera Systems.mkv" 760
 
+# Two "creators", each a channel of its own, nested in a "Video Essayists"
+# channel together with the Essays folder (PLAN.md M11).
+make_clip "Essayists/Alpha/Alpha 1 - Envy.mkv" 780
+make_clip "Essayists/Alpha/Alpha 2 - Opulence.mkv" 800
+make_clip "Essayists/Alpha/Alpha 3 - Cringe.mkv" 820
+make_clip "Essayists/Beta/Beta 1 - The Room.mkv" 840
+make_clip "Essayists/Beta/Beta 2 - Lockout.mkv" 850
+make_clip "Essayists/Beta/Beta 3 - Marvel.mkv" 860
+
 # Spaces, unicode, and an apostrophe in one name.
 make_clip "Misc/Café Society's Ünïcode Clip — Ørsted.mkv" 880
 
@@ -191,6 +201,36 @@ id = "misc"
 number = 4
 name = "Misc"
 items = [{ source = "test", path = "Misc" }]
+rule = { kind = "ordered" }
+
+# Nested channels (PLAN.md M11). "Video Essayists" shuffles between two
+# child channels and the six Essays. It shares the children's playback
+# state, so watching Beta here or on channel 6 is the same position.
+# Alpha is hidden: no number, not in the guide or channel up/down.
+[[channel]]
+id = "essayists"
+number = 5
+name = "Video Essayists"
+items = [
+  { channel = "alpha" },
+  { channel = "beta" },
+  { source = "test", path = "Essays" },
+]
+rule = { kind = "shuffled" }
+state = "shared"
+
+[[channel]]
+id = "alpha"
+name = "Alpha"
+hidden = true
+items = [{ source = "test", path = "Essayists/Alpha" }]
+rule = { kind = "ordered" }
+
+[[channel]]
+id = "beta"
+number = 6
+name = "Beta"
+items = [{ source = "test", path = "Essayists/Beta" }]
 rule = { kind = "ordered" }
 TOML
 echo "  marathon.toml"

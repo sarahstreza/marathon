@@ -7,6 +7,7 @@
 // state the server never hears about (the guide's highlight).
 package marathon.core
 
+import marathon.api.models.ChannelRef
 import marathon.api.models.ChannelSummary
 import marathon.api.models.Item
 import marathon.api.models.Now
@@ -51,22 +52,61 @@ data class Banner(
     val channelName: String,
     /** The item, e.g. `S03E14 · The Injury` (see [itemTitle]), if known. */
     val title: String?,
-    /** The show, if the item has one and it differs from the channel name. */
+    /**
+     * The show, if the item has one and it differs from the name of the
+     * channel it comes from.
+     */
     val show: String?,
+    /**
+     * The child channels the item comes through, for a channel with nested
+     * channels (PLAN.md M11), e.g. `Contrapoints`; null for an ordinary
+     * channel. See [itemLine].
+     */
+    val via: String? = null,
 ) {
+    /**
+     * The line under the channel name: `Contrapoints: Show · S01E02 ·
+     * Envy`, with whichever parts are known. Together with the channel name
+     * above it, a nested channel reads "Video Essayists · Contrapoints:
+     * Envy".
+     */
+    fun itemLine(): String {
+        val item = listOfNotNull(show, title).joinToString(" · ")
+        return when {
+            via == null -> item
+            item.isEmpty() -> via
+            else -> "$via: $item"
+        }
+    }
+
     companion object {
-        fun fromNow(now: Now): Banner = of(now.channelNumber, now.channelName, now.item)
+        fun fromNow(now: Now): Banner =
+            of(now.channelNumber, now.channelName, now.resolutionPath.orEmpty(), now.item)
 
-        fun fromSummary(channel: ChannelSummary): Banner = of(channel.number, channel.name, channel.current)
+        fun fromSummary(channel: ChannelSummary): Banner =
+            of(channel.number, channel.name, channel.resolutionPath.orEmpty(), channel.current)
 
-        private fun of(number: Int, name: String, item: Item?): Banner = Banner(
-            channelNumber = number,
-            channelName = name,
-            title = item?.let(::itemTitle),
-            show = item?.show?.takeIf { it != name },
-        )
+        private fun of(number: Int, name: String, path: List<ChannelRef>, item: Item?): Banner {
+            // The channel the item belongs to: a show named like it is
+            // redundant.
+            val owner = path.lastOrNull()?.name ?: name
+            return Banner(
+                channelNumber = number,
+                channelName = name,
+                title = item?.let(::itemTitle),
+                show = item?.show?.takeIf { it != owner },
+                via = via(path),
+            )
+        }
     }
 }
+
+/**
+ * The names of the child channels in a resolution path (everything after
+ * the tuned channel), joined with ` · `; null if there are none.
+ */
+private fun via(path: List<ChannelRef>): String? =
+    path.drop(1).map { it.name }.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 
 /** The guide: every channel and what it is on. */
 data class Guide(
@@ -81,7 +121,10 @@ data class Guide(
                 GuideRow(
                     number = c.number,
                     name = c.name,
-                    on = c.current?.let(::itemTitle),
+                    on = c.current?.let { item ->
+                        val via = via(c.resolutionPath.orEmpty())
+                        if (via == null) itemTitle(item) else "$via: ${itemTitle(item)}"
+                    },
                     current = c.id == current,
                 )
             },
@@ -94,7 +137,11 @@ data class Guide(
 data class GuideRow(
     val number: Int,
     val name: String,
-    /** What the channel is on (see [itemTitle]); null if it has nothing to play. */
+    /**
+     * What the channel is on (see [itemTitle]), after the child channels it
+     * comes through if any (`Contrapoints: Envy`); null if it has nothing to
+     * play.
+     */
     val on: String?,
     /** Whether this is the channel being watched. */
     val current: Boolean,

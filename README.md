@@ -15,7 +15,9 @@ mouse, and gamepad), M6 (remote control and events over the API), M7
 (Jellyfin libraries as a source) are implemented and awaiting their manual
 checks. M9 (macOS) is not started; it needs Mac hardware. M10 (the Android
 client, [`docs/ANDROID.md`](docs/ANDROID.md)) is implemented and builds an
-APK, but hasn't been run on a device yet. [`PLAN.md`](PLAN.md) has the design, API, and
+APK, but hasn't been run on a device yet. M11 (nested channels: channels
+made of other channels) is implemented and awaiting its manual checks.
+[`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the

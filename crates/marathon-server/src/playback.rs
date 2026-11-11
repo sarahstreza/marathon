@@ -3,71 +3,91 @@
 //! Every operation here takes the server-wide playback lock
 //! ([`crate::app::Inner::playback`]) for its whole read-modify-write, so
 //! concurrent requests see each other's effects in order.
+//!
+//! The work of resolving a channel (through any child channels) to an item
+//! and moving it along is done by [`crate::nested::Resolver`] on data
+//! loaded here; this module loads that data, saves what changed, records
+//! events, and builds API responses.
 
+use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use marathon_api::{
-    AdvanceReason, ChannelSummary, EventKind, Item, NextItem, Now, ProgressReport, Subtitle, paths,
+    AdvanceReason, ChannelRef, ChannelSummary, EventKind, Item, NextItem, Now, PlannedItem,
+    ProgressReport, Subtitle, paths,
 };
-use marathon_rules::{Cursor, ItemKey, Rule};
 
 use crate::app::App;
-use crate::db::{ChannelRow, ItemRow, NewEvent, StateRow};
+use crate::db::{ItemRow, NewEvent, StateRow};
 use crate::error::ApiError;
+use crate::nested::{
+    ChannelData, Data, MAX_SKIPPED_CHILDREN, NodeState, Resolved, Resolver, Row, Unresolved,
+    duration_of,
+};
 use crate::scan::SidecarSubtitle;
 
-/// A channel with its rule, playable items, and (ensured) state.
-struct Loaded {
-    channel: ChannelRow,
-    rule: Rule,
-    items: Vec<ItemRow>,
-    keys: Vec<ItemKey>,
-    state: StateRow,
-    cursor: Cursor,
-}
+/// Default and maximum number of items in a plan.
+const PLAN_DEFAULT_ITEMS: u32 = 10;
+const PLAN_MAX_ITEMS: u32 = 500;
 
-impl Loaded {
-    fn current(&self) -> &ItemRow {
-        // `ensure_state` only ever stores an item from `items`, and `items`
-        // is non-empty, so the lookup succeeds; fall back to the first item
-        // rather than panic if that invariant is ever broken.
-        self.items
-            .iter()
-            .find(|i| Some(&i.id) == self.state.item_id.as_ref())
-            .unwrap_or(&self.items[0])
-    }
-
-    fn item(&self, id: &str) -> Option<&ItemRow> {
-        self.items.iter().find(|i| i.id == id)
-    }
+/// How far ahead to plan: `GET /channels/{id}/plan`'s query.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlanLimit {
+    /// At most this many items, including the current one (default 10, or
+    /// 500 when `hours` is given; at most 500).
+    pub items: Option<u32>,
+    /// Stop at the first item starting this many hours or more ahead.
+    pub hours: Option<u32>,
 }
 
 impl App {
-    /// `GET /channels`: every channel with what it is on. Channels never
-    /// tuned before get their starting state here.
-    pub async fn list_channels(&self) -> Result<Vec<ChannelSummary>, ApiError> {
+    /// `GET /channels`: channels with what they are on, in guide order (by
+    /// number). Hidden channels are left out unless `include_hidden`, and
+    /// then listed after the rest. Channels never tuned before get their
+    /// starting state here.
+    pub async fn list_channels(
+        &self,
+        include_hidden: bool,
+    ) -> Result<Vec<ChannelSummary>, ApiError> {
         let _guard = self.inner.playback.lock().await;
+        let mut channels: Vec<_> = self
+            .config()
+            .channels
+            .iter()
+            .filter(|c| include_hidden || !c.hidden)
+            .collect();
+        channels.sort_by(|a, b| {
+            (a.hidden, a.number.unwrap_or(0), &a.id).cmp(&(b.hidden, b.number.unwrap_or(0), &b.id))
+        });
         let mut out = Vec::new();
-        for channel in self.inner.db.channels().await? {
-            let summary = match self.load(&channel.id).await {
-                Ok(loaded) => ChannelSummary {
-                    id: channel.id.clone(),
-                    number: to_u32(channel.number),
-                    name: channel.name.clone(),
-                    item_count: u32::try_from(loaded.items.len()).unwrap_or(u32::MAX),
-                    current: Some(to_api_item(loaded.current())?),
-                    position_ms: to_u64(loaded.state.position_ms),
-                },
-                Err(ApiError::ChannelEmpty(_)) => ChannelSummary {
-                    id: channel.id.clone(),
-                    number: to_u32(channel.number),
-                    name: channel.name.clone(),
-                    item_count: 0,
-                    current: None,
-                    position_ms: 0,
-                },
-                Err(err) => return Err(err),
+        for channel in channels {
+            let id = channel.id.as_str();
+            let (data, rows) = self.load_data(id).await?;
+            let mut resolver = Resolver::new(&data, rows, random_seed);
+            let resolved = resolver.ensure(id, id, None);
+            let item_count = u32::try_from(resolver.leaf_items(id).len()).unwrap_or(u32::MAX);
+            let warnings = resolver.take_warnings();
+            self.save_rows(resolver.into_rows()).await?;
+            let mut summary = ChannelSummary {
+                id: id.to_owned(),
+                number: channel.number.unwrap_or(0),
+                name: channel.name.clone(),
+                item_count,
+                current: None,
+                position_ms: 0,
+                hidden: channel.hidden,
+                resolution_path: Vec::new(),
             };
+            match resolved {
+                Ok(resolved) => {
+                    summary.current = Some(to_api_item(&resolved.item)?);
+                    summary.position_ms = to_u64(resolved.position_ms);
+                    summary.resolution_path = channel_refs(&data, &resolved);
+                }
+                Err(err) => {
+                    tracing::debug!(channel = id, ?err, ?warnings, "channel has nothing to play");
+                }
+            }
             out.push(summary);
         }
         Ok(out)
@@ -76,19 +96,26 @@ impl App {
     /// `GET /channels/{id}/now`: tunes in. Records a `tuned` event.
     pub async fn now(&self, channel_id: &str, client_id: Option<&str>) -> Result<Now, ApiError> {
         let _guard = self.inner.playback.lock().await;
-        let loaded = self.load(channel_id).await?;
+        let (data, rows) = self.load_data(channel_id).await?;
+        let mut resolver = Resolver::new(&data, rows, random_seed);
+        let resolved = self.resolve(&mut resolver, channel_id).await?;
+        let next = predict_next(&resolver, channel_id);
+        let warnings = resolver.take_warnings();
+        self.save_rows(resolver.into_rows()).await?;
         self.record(
-            &loaded,
+            channel_id,
+            &resolved,
             client_id,
-            &loaded.current().id,
             EventKind::Tuned,
-            loaded.state.position_ms,
+            resolved.position_ms,
         )
         .await?;
-        to_now(&loaded)
+        to_now(&data, channel_id, &resolved, next.as_ref(), warnings)
     }
 
-    /// `POST /channels/{id}/progress`: saves the playback position.
+    /// `POST /channels/{id}/progress`: saves the playback position. For a
+    /// channel playing a child channel, the position is saved where the
+    /// item's own channel keeps it (the child's state, if shared).
     ///
     /// Rejects reports for anything but the current item with
     /// [`ApiError::StaleItem`], so a client still playing an old item cannot
@@ -100,9 +127,12 @@ impl App {
         client_id: Option<&str>,
     ) -> Result<(), ApiError> {
         let _guard = self.inner.playback.lock().await;
-        let loaded = self.load(channel_id).await?;
-        let current = loaded.current();
+        let (data, rows) = self.load_data(channel_id).await?;
+        let mut resolver = Resolver::new(&data, rows, random_seed);
+        let resolved = self.resolve(&mut resolver, channel_id).await?;
+        let current = &resolved.item;
         if current.id != report.item_id {
+            self.save_rows(resolver.into_rows()).await?;
             return Err(ApiError::StaleItem {
                 channel: channel_id.to_owned(),
                 reported: report.item_id.clone(),
@@ -110,8 +140,9 @@ impl App {
             });
         }
         let position = to_i64(report.position_ms);
+        resolver.set_position(resolved.owner(), position);
+        self.save_rows(resolver.into_rows()).await?;
         let db = &self.inner.db;
-        db.set_position(channel_id, position, now_ms()).await?;
         // A duration the catalog provided (Jellyfin's) is authoritative;
         // clients only fill in durations nobody else knows.
         let from_catalog = current.external_id.is_some() && current.duration_ms.is_some();
@@ -130,12 +161,14 @@ impl App {
         } else {
             EventKind::Progress
         };
-        self.record(&loaded, client_id, &current.id, kind, position)
+        self.record(channel_id, &resolved, client_id, kind, position)
             .await
     }
 
     /// `POST /channels/{id}/advance`. Idempotent: only moves the channel if
     /// `from_item_id` is its current item; otherwise returns where it is.
+    /// A channel playing a child channel moves the child on, then picks its
+    /// next entry.
     pub async fn advance(
         &self,
         channel_id: &str,
@@ -143,27 +176,8 @@ impl App {
         reason: AdvanceReason,
         client_id: Option<&str>,
     ) -> Result<Now, ApiError> {
-        let _guard = self.inner.playback.lock().await;
-        let loaded = self.load(channel_id).await?;
-        if loaded.current().id != from_item_id {
-            return to_now(&loaded);
-        }
-        let Some(step) = marathon_rules::next(&loaded.rule, &loaded.keys, Some(&loaded.cursor))
-        else {
-            // `load` guarantees at least one item, and `next` only returns
-            // `None` for zero items.
-            return to_now(&loaded);
-        };
-        self.move_to(&loaded, step).await?;
-        self.record(
-            &loaded,
-            client_id,
-            from_item_id,
-            reason.into(),
-            loaded.state.position_ms,
-        )
-        .await?;
-        to_now(&self.load(channel_id).await?)
+        self.step(channel_id, from_item_id, client_id, reason.into())
+            .await
     }
 
     /// `POST /channels/{id}/previous`. Like `advance`, only moves the
@@ -175,25 +189,98 @@ impl App {
         from_item_id: &str,
         client_id: Option<&str>,
     ) -> Result<Now, ApiError> {
+        self.step(channel_id, from_item_id, client_id, EventKind::Previous)
+            .await
+    }
+
+    /// `advance` (for `Ended` and `Skipped`) and `previous`.
+    async fn step(
+        &self,
+        channel_id: &str,
+        from_item_id: &str,
+        client_id: Option<&str>,
+        kind: EventKind,
+    ) -> Result<Now, ApiError> {
         let _guard = self.inner.playback.lock().await;
-        let loaded = self.load(channel_id).await?;
-        if loaded.current().id != from_item_id {
-            return to_now(&loaded);
-        }
-        let Some(step) = marathon_rules::previous(&loaded.rule, &loaded.keys, &loaded.cursor)
-        else {
-            return to_now(&loaded);
+        let (data, rows) = self.load_data(channel_id).await?;
+        let mut resolver = Resolver::new(&data, rows, random_seed);
+        let from = self.resolve(&mut resolver, channel_id).await?;
+        let moved = from.item.id == from_item_id
+            && match kind {
+                EventKind::Previous => resolver.previous(channel_id, channel_id),
+                _ => {
+                    resolver.advance(channel_id, channel_id);
+                    true
+                }
+            };
+        let resolved = if moved {
+            self.resolve(&mut resolver, channel_id).await?
+        } else {
+            from.clone()
         };
-        self.move_to(&loaded, step).await?;
-        self.record(
-            &loaded,
-            client_id,
-            from_item_id,
-            EventKind::Previous,
-            loaded.state.position_ms,
-        )
-        .await?;
-        to_now(&self.load(channel_id).await?)
+        let next = predict_next(&resolver, channel_id);
+        let warnings = resolver.take_warnings();
+        self.save_rows(resolver.into_rows()).await?;
+        if moved {
+            self.record(channel_id, &from, client_id, kind, from.position_ms)
+                .await?;
+        }
+        to_now(&data, channel_id, &resolved, next.as_ref(), warnings)
+    }
+
+    /// `GET /channels/{id}/plan`: what the channel will play, starting with
+    /// the current item, if it plays on without interruption. Computed by
+    /// stepping copies of the channel's state (and its children's)
+    /// exactly as playback would, so playing the channel produces the
+    /// same sequence, as long as nothing else moves it or its children
+    /// meanwhile. Records no event.
+    pub async fn plan(
+        &self,
+        channel_id: &str,
+        limit: PlanLimit,
+    ) -> Result<Vec<PlannedItem>, ApiError> {
+        let _guard = self.inner.playback.lock().await;
+        let (data, rows) = self.load_data(channel_id).await?;
+        let mut resolver = Resolver::new(&data, rows, random_seed);
+        let mut current = self.resolve(&mut resolver, channel_id).await?;
+        // Starting a channel never tuned is saved, as `GET /channels`
+        // does; everything after that is a dry run.
+        let mut dry = resolver.dry_run();
+        self.save_rows(resolver.into_rows()).await?;
+
+        let max_items = limit
+            .items
+            .unwrap_or(if limit.hours.is_some() {
+                PLAN_MAX_ITEMS
+            } else {
+                PLAN_DEFAULT_ITEMS
+            })
+            .clamp(1, PLAN_MAX_ITEMS);
+        let horizon = limit.hours.map(|h| u64::from(h) * 3_600_000);
+        let mut starts_in: u64 = 0;
+        let mut position = to_u64(current.position_ms);
+        let mut out = Vec::new();
+        loop {
+            out.push(PlannedItem {
+                item: to_api_item(&current.item)?,
+                resolution_path: channel_refs(&data, &current),
+                starts_in_ms: starts_in,
+            });
+            starts_in += duration_of(&current.item).saturating_sub(position);
+            position = 0;
+            if out.len() >= max_items as usize || horizon.is_some_and(|h| starts_in >= h) {
+                break;
+            }
+            dry.advance(channel_id, channel_id);
+            match dry.ensure(channel_id, channel_id, None) {
+                Ok(next) => current = next,
+                Err(err) => {
+                    tracing::debug!(channel = channel_id, ?err, "plan stops early");
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `GET /items/{id}`.
@@ -207,104 +294,118 @@ impl App {
         to_api_item(&row)
     }
 
-    /// Loads a channel and makes sure it has a valid current item: a channel
-    /// never tuned before starts at its rule's first item, and one whose
-    /// current item has gone missing (or left the channel) moves on to the
-    /// next. Must be called with the playback lock held.
-    async fn load(&self, channel_id: &str) -> Result<Loaded, ApiError> {
-        let db = &self.inner.db;
-        let channel = db
-            .channel(channel_id)
-            .await?
-            .ok_or_else(|| ApiError::NotFound(format!("no channel {channel_id}")))?;
-        let rule: Rule = serde_json::from_str(&channel.rule_json)?;
-        let items = db.channel_items(channel_id).await?;
-        if items.is_empty() {
-            return Err(ApiError::ChannelEmpty(channel_id.to_owned()));
-        }
-        let keys: Vec<ItemKey> = items.iter().map(to_key).collect();
-
-        let saved = db.state(channel_id).await?;
-        let saved_cursor = saved.as_ref().and_then(|s| {
-            serde_json::from_str::<Cursor>(&s.cursor_json)
-                .inspect_err(|err| {
-                    tracing::warn!(channel = channel_id, %err, "discarding unreadable cursor");
-                })
-                .ok()
-        });
-
-        match (saved, saved_cursor) {
-            (Some(state), Some(cursor))
-                if state
-                    .item_id
-                    .as_ref()
-                    .is_some_and(|id| items.iter().any(|i| &i.id == id)) =>
-            {
-                Ok(Loaded {
-                    channel,
-                    rule,
-                    items,
-                    keys,
-                    state,
-                    cursor,
-                })
-            }
-            (saved, cursor) => {
-                // First tune-in, an unreadable cursor, or the current item
-                // is gone: step forward from wherever the cursor was.
-                let cursor = cursor.unwrap_or_else(|| Cursor::seeded(random_seed()));
-                let step = marathon_rules::next(&rule, &keys, Some(&cursor))
-                    .ok_or_else(|| ApiError::ChannelEmpty(channel_id.to_owned()))?;
-                if let Some(old) = saved.and_then(|s| s.item_id) {
-                    tracing::info!(channel = channel_id, from = %old, to = %step.item.id,
-                        "current item is no longer playable; moving on");
-                }
-                let state = StateRow {
-                    channel_id: channel_id.to_owned(),
-                    item_id: Some(step.item.id.clone()),
-                    position_ms: 0,
-                    cursor_json: serde_json::to_string(&step.cursor)?,
-                    updated_at: now_ms(),
-                };
-                db.save_state(&state).await?;
-                Ok(Loaded {
-                    channel,
-                    rule,
-                    items,
-                    keys,
-                    state,
-                    cursor: step.cursor,
+    /// Resolves a channel to its current item, saving whatever progress
+    /// the resolver made (such as stepping past empty children) even if it
+    /// fails.
+    async fn resolve(
+        &self,
+        resolver: &mut Resolver<'_>,
+        channel_id: &str,
+    ) -> Result<Resolved, ApiError> {
+        match resolver.ensure(channel_id, channel_id, None) {
+            Ok(resolved) => Ok(resolved),
+            Err(err) => {
+                let warnings = resolver.take_warnings();
+                self.save_rows(resolver.clone().into_rows()).await?;
+                Err(match err {
+                    Unresolved::Empty(_) if warnings.is_empty() => {
+                        ApiError::ChannelEmpty(channel_id.to_owned())
+                    }
+                    Unresolved::Empty(_) => ApiError::NothingToPlay {
+                        channel: channel_id.to_owned(),
+                        detail: warnings.join("; "),
+                    },
+                    Unresolved::TooManySkipped => ApiError::NothingToPlay {
+                        channel: channel_id.to_owned(),
+                        detail: format!(
+                            "stopped after skipping {MAX_SKIPPED_CHILDREN} child channels \
+                             with nothing to play ({})",
+                            warnings.join("; ")
+                        ),
+                    },
                 })
             }
         }
     }
 
-    /// Moves a loaded channel to the start of `step`'s item.
-    async fn move_to(&self, loaded: &Loaded, step: marathon_rules::Step) -> Result<(), ApiError> {
-        let state = StateRow {
-            channel_id: loaded.channel.id.clone(),
-            item_id: Some(step.item.id),
-            position_ms: 0,
-            cursor_json: serde_json::to_string(&step.cursor)?,
-            updated_at: now_ms(),
-        };
-        self.inner.db.save_state(&state).await?;
+    /// Loads a channel and every channel nested in it: definitions from
+    /// config, items and state rows from the database. Must be called with
+    /// the playback lock held.
+    async fn load_data(&self, channel_id: &str) -> Result<(Data, HashMap<String, Row>), ApiError> {
+        let config = self.config();
+        if config.channel(channel_id).is_none() {
+            return Err(ApiError::NotFound(format!("no channel {channel_id}")));
+        }
+        let db = &self.inner.db;
+        let mut data = Data::default();
+        let mut rows = HashMap::new();
+        let mut queue = VecDeque::from([channel_id.to_owned()]);
+        while let Some(id) = queue.pop_front() {
+            if data.channels.contains_key(&id) {
+                continue;
+            }
+            // Config validation guarantees every child exists; skip any
+            // that does not rather than fail.
+            let Some(channel) = config.channel(&id) else {
+                continue;
+            };
+            queue.extend(channel.children().map(|c| c.channel.clone()));
+            let items = db.channel_items(&id).await?;
+            if let Some(state) = db.state(&id).await? {
+                rows.insert(id.clone(), row_from(&state));
+            }
+            data.channels.insert(
+                id,
+                ChannelData {
+                    config: channel.clone(),
+                    items,
+                },
+            );
+        }
+        Ok((data, rows))
+    }
+
+    /// Saves the rows a resolver changed.
+    async fn save_rows(&self, rows: HashMap<String, Row>) -> Result<(), ApiError> {
+        let now = now_ms();
+        for (channel_id, row) in rows {
+            let (true, Some(own)) = (row.dirty, row.own) else {
+                continue;
+            };
+            let state = StateRow {
+                channel_id,
+                item_id: own.item_id,
+                position_ms: own.position_ms,
+                cursor_json: serde_json::to_string(&own.cursor)?,
+                updated_at: now,
+                children_json: serde_json::to_string(&row.children)?,
+            };
+            self.inner.db.save_state(&state).await?;
+        }
         Ok(())
     }
 
     async fn record(
         &self,
-        loaded: &Loaded,
+        channel_id: &str,
+        resolved: &Resolved,
         client_id: Option<&str>,
-        item_id: &str,
         kind: EventKind,
         position_ms: i64,
     ) -> Result<(), ApiError> {
+        let path: Vec<&str> = resolved
+            .chain
+            .iter()
+            .map(|h| h.channel_id.as_str())
+            .collect();
+        let path_json = serde_json::to_string(&path)?;
         let event = NewEvent {
             ts: now_ms(),
             client_id,
-            channel_id: &loaded.channel.id,
-            item_id,
+            channel_id,
+            resolved_channel_id: &resolved.owner().channel_id,
+            resolution_path_json: &path_json,
+            item_id: &resolved.item.id,
             kind: kind.as_str(),
             position_ms,
         };
@@ -316,38 +417,88 @@ impl App {
     }
 }
 
-fn to_now(loaded: &Loaded) -> Result<Now, ApiError> {
-    let current = loaded.current();
-    let next = marathon_rules::next(&loaded.rule, &loaded.keys, Some(&loaded.cursor))
-        .and_then(|step| loaded.item(&step.item.id))
-        .map(|row| {
+/// Reads a `channel_state` row. An unreadable cursor or children object is
+/// discarded with a warning, and the channel starts over (keeping nothing
+/// it cannot read).
+fn row_from(state: &StateRow) -> Row {
+    let own = serde_json::from_str(&state.cursor_json)
+        .inspect_err(|err| {
+            tracing::warn!(channel = %state.channel_id, %err, "discarding unreadable cursor");
+        })
+        .ok()
+        .map(|cursor| NodeState {
+            item_id: state.item_id.clone(),
+            position_ms: state.position_ms,
+            cursor,
+        });
+    let children = serde_json::from_str(&state.children_json)
+        .inspect_err(|err| {
+            tracing::warn!(channel = %state.channel_id, %err,
+                "discarding unreadable child channel states");
+        })
+        .unwrap_or_default();
+    Row {
+        own,
+        children,
+        dirty: false,
+    }
+}
+
+/// What the channel will play after its current item, worked out on a dry
+/// run of the resolver.
+fn predict_next(resolver: &Resolver<'_>, channel_id: &str) -> Option<Resolved> {
+    let mut dry = resolver.dry_run();
+    dry.advance(channel_id, channel_id);
+    dry.ensure(channel_id, channel_id, None).ok()
+}
+
+/// The resolution path, with names.
+fn channel_refs(data: &Data, resolved: &Resolved) -> Vec<ChannelRef> {
+    resolved
+        .chain
+        .iter()
+        .map(|hop| ChannelRef {
+            id: hop.channel_id.clone(),
+            name: data
+                .channels
+                .get(&hop.channel_id)
+                .map(|c| c.config.name.clone())
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn to_now(
+    data: &Data,
+    channel_id: &str,
+    resolved: &Resolved,
+    next: Option<&Resolved>,
+    warnings: Vec<String>,
+) -> Result<Now, ApiError> {
+    let channel = &data
+        .channels
+        .get(channel_id)
+        .ok_or_else(|| ApiError::NotFound(format!("no channel {channel_id}")))?
+        .config;
+    let next = next
+        .map(|next| {
             Ok::<_, ApiError>(NextItem {
-                item: to_api_item(row)?,
-                stream_url: paths::stream(&row.id),
+                item: to_api_item(&next.item)?,
+                stream_url: paths::stream(&next.item.id),
             })
         })
         .transpose()?;
     Ok(Now {
-        channel_id: loaded.channel.id.clone(),
-        channel_number: to_u32(loaded.channel.number),
-        channel_name: loaded.channel.name.clone(),
-        item: to_api_item(current)?,
-        position_ms: to_u64(loaded.state.position_ms),
-        stream_url: paths::stream(&current.id),
+        channel_id: channel_id.to_owned(),
+        channel_number: channel.number.unwrap_or(0),
+        channel_name: channel.name.clone(),
+        item: to_api_item(&resolved.item)?,
+        position_ms: to_u64(resolved.position_ms),
+        stream_url: paths::stream(&resolved.item.id),
         next,
+        resolution_path: channel_refs(data, resolved),
+        warnings,
     })
-}
-
-/// The rules engine's view of an item. The path is prefixed with the source
-/// ID so that items from different sources in one channel stay distinct.
-fn to_key(row: &ItemRow) -> ItemKey {
-    ItemKey {
-        id: row.id.clone(),
-        path: format!("{}/{}", row.source_id, row.path),
-        show: row.show.clone(),
-        season: row.season.and_then(|s| u32::try_from(s).ok()),
-        episode: row.episode.and_then(|e| u32::try_from(e).ok()),
-    }
 }
 
 /// The sidecar subtitles stored for an item.
@@ -402,8 +553,4 @@ fn to_i64(v: u64) -> i64 {
 
 fn to_u64(v: i64) -> u64 {
     u64::try_from(v).unwrap_or(0)
-}
-
-fn to_u32(v: i64) -> u32 {
-    u32::try_from(v).unwrap_or(0)
 }

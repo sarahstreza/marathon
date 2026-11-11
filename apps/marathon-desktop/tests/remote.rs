@@ -233,6 +233,7 @@ fn reconnects_with_backoff_after_a_server_restart() {
         item_id: "i1".into(),
         title: "Show · S01E01 · One".into(),
         position_ms: 0,
+        resolution_path: vec!["show".into()],
     };
     client.publisher.publish(playing);
     wait_until(&base, "the TV reports what it plays", |c| {

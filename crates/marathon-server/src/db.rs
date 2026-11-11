@@ -75,6 +75,9 @@ pub struct StateRow {
     pub position_ms: i64,
     pub cursor_json: String,
     pub updated_at: i64,
+    /// The states an independent parent keeps for its descendants (PLAN.md
+    /// M11), as a JSON object; `{}` otherwise.
+    pub children_json: String,
 }
 
 /// A row of `events`.
@@ -87,6 +90,8 @@ pub struct EventRow {
     pub item_id: Option<String>,
     pub kind: String,
     pub position_ms: Option<i64>,
+    pub resolved_channel_id: Option<String>,
+    pub resolution_path_json: Option<String>,
 }
 
 /// A new event to append.
@@ -94,7 +99,13 @@ pub struct EventRow {
 pub struct NewEvent<'a> {
     pub ts: i64,
     pub client_id: Option<&'a str>,
+    /// The channel the viewer was tuned to.
     pub channel_id: &'a str,
+    /// The channel `item_id` belongs to (`channel_id`, or a nested child).
+    pub resolved_channel_id: &'a str,
+    /// JSON array of the channel IDs from `channel_id` to
+    /// `resolved_channel_id`.
+    pub resolution_path_json: &'a str,
     pub item_id: &'a str,
     pub kind: &'a str,
     pub position_ms: i64,
@@ -422,7 +433,7 @@ impl Db {
 
     pub async fn state(&self, channel_id: &str) -> Result<Option<StateRow>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT channel_id, item_id, position_ms, cursor_json, updated_at
+            "SELECT channel_id, item_id, position_ms, cursor_json, updated_at, children_json
              FROM channel_state WHERE channel_id = ?",
         )
         .bind(channel_id)
@@ -433,46 +444,34 @@ impl Db {
     /// Moves a channel to `item_id` with a new cursor and position.
     pub async fn save_state(&self, state: &StateRow) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO channel_state (channel_id, item_id, position_ms, cursor_json, updated_at)
-             VALUES (?, ?, ?, ?, ?)
+            "INSERT INTO channel_state
+                (channel_id, item_id, position_ms, cursor_json, updated_at, children_json)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (channel_id) DO UPDATE SET
                 item_id = excluded.item_id,
                 position_ms = excluded.position_ms,
                 cursor_json = excluded.cursor_json,
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at,
+                children_json = excluded.children_json",
         )
         .bind(&state.channel_id)
         .bind(&state.item_id)
         .bind(state.position_ms)
         .bind(&state.cursor_json)
         .bind(state.updated_at)
+        .bind(&state.children_json)
         .execute(&self.pool)
         .await
         .map(|_| ())
-    }
-
-    /// Updates only the saved position of a channel.
-    pub async fn set_position(
-        &self,
-        channel_id: &str,
-        position_ms: i64,
-        now_ms: i64,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE channel_state SET position_ms = ?, updated_at = ? WHERE channel_id = ?")
-            .bind(position_ms)
-            .bind(now_ms)
-            .bind(channel_id)
-            .execute(&self.pool)
-            .await
-            .map(|_| ())
     }
 
     // --- Events -----------------------------------------------------------
 
     pub async fn insert_event(&self, id: &str, event: &NewEvent<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO events (id, ts, client_id, channel_id, item_id, kind, position_ms)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO events (id, ts, client_id, channel_id, item_id, kind, position_ms,
+                                 resolved_channel_id, resolution_path_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(event.ts)
@@ -481,6 +480,8 @@ impl Db {
         .bind(event.item_id)
         .bind(event.kind)
         .bind(event.position_ms)
+        .bind(event.resolved_channel_id)
+        .bind(event.resolution_path_json)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -501,7 +502,8 @@ impl Db {
     /// "newest", so events recorded in the same millisecond keep their order.
     pub async fn history(&self, limit: u32) -> Result<Vec<EventRow>, sqlx::Error> {
         sqlx::query_as(
-            "SELECT id, ts, client_id, channel_id, item_id, kind, position_ms
+            "SELECT id, ts, client_id, channel_id, item_id, kind, position_ms,
+                    resolved_channel_id, resolution_path_json
              FROM events ORDER BY rowid DESC LIMIT ?",
         )
         .bind(limit)
@@ -571,6 +573,8 @@ mod tests {
                 ts: 1000,
                 client_id: None,
                 channel_id: "c",
+                resolved_channel_id: "c",
+                resolution_path_json: r#"["c"]"#,
                 item_id: "i",
                 kind,
                 position_ms: i as i64,

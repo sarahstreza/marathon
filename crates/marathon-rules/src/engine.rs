@@ -7,6 +7,7 @@ use crate::bag::Bag;
 use crate::catalog::{self, Catalog};
 use crate::grouped::{self, GroupedState};
 use crate::item::ItemKey;
+use crate::weighted::{self, WeightedState};
 
 /// RNG domain for the `shuffled` rule's item order.
 pub(crate) const DOMAIN_ITEMS: u64 = 1;
@@ -14,6 +15,8 @@ pub(crate) const DOMAIN_ITEMS: u64 = 1;
 pub(crate) const DOMAIN_GROUPS: u64 = 2;
 /// RNG domain for the order of items within a group of a `grouped` rule.
 pub(crate) const DOMAIN_WITHIN: u64 = 3;
+/// RNG domain for the `weighted` rule's picks.
+pub(crate) const DOMAIN_WEIGHTED: u64 = 4;
 
 /// A channel's position in its rule's sequence.
 ///
@@ -46,6 +49,8 @@ pub(crate) enum State {
     Shuffled { bag: Bag<String> },
     /// The `grouped` rule's state.
     Grouped(GroupedState),
+    /// The `weighted` rule's state.
+    Weighted(WeightedState),
 }
 
 impl Cursor {
@@ -97,7 +102,27 @@ pub struct Step {
 /// pass [`Cursor::seeded`] to choose the seed. Items may change between calls
 /// (library rescans): an item that has gone is skipped, and new items are
 /// picked up no later than the next cycle.
+///
+/// The [`Rule::Weighted`] rule weighs every item equally here; use
+/// [`next_weighted`] to give it weights.
 pub fn next(rule: &Rule, items: &[ItemKey], cursor: Option<&Cursor>) -> Option<Step> {
+    next_weighted(rule, items, cursor, &|_| 1)
+}
+
+/// Like [`next`], with `weight` giving each item's weight for the
+/// [`Rule::Weighted`] rule. Other rules ignore the weights.
+///
+/// Weights are relative: an item of weight 2 is picked twice as often as
+/// one of weight 1, in the long run. Items of weight 0 are never picked,
+/// unless every item has weight 0, in which case they all count equally.
+/// The weighted rule never picks the current item again straight away when
+/// there is any other item to pick.
+pub fn next_weighted(
+    rule: &Rule,
+    items: &[ItemKey],
+    cursor: Option<&Cursor>,
+    weight: &dyn Fn(&ItemKey) -> u64,
+) -> Option<Step> {
     let start = Cursor::default();
     let cursor = cursor.unwrap_or(&start);
     let catalog = Catalog::new(items);
@@ -136,6 +161,14 @@ pub fn next(rule: &Rule, items: &[ItemKey], cursor: Option<&Cursor>) -> Option<S
         Rule::Grouped { by, groups, within } => {
             grouped::next(*by, *groups, *within, seed, &catalog, &cursor.state, from)?
         }
+        Rule::Weighted { .. } => {
+            let state = match &cursor.state {
+                State::Weighted(state) => Some(state),
+                _ => None,
+            };
+            let (item, state) = weighted::next(&catalog, weight, seed, state, from)?;
+            (item, State::Weighted(state))
+        }
     };
     Some(Step {
         item: item.clone(),
@@ -157,6 +190,7 @@ pub fn next(rule: &Rule, items: &[ItemKey], cursor: Option<&Cursor>) -> Option<S
 /// - `items` is empty or the cursor is at the start;
 /// - for shuffles, stepping back past the start of the previous cycle (only
 ///   one cycle of history is kept);
+/// - for the weighted rule, stepping back more than 50 picks;
 /// - the cursor was made by a different rule, unless the rule is `ordered`.
 ///
 /// The `ordered` rule wraps around, so `previous` from its first item is its
@@ -182,6 +216,13 @@ pub fn previous(rule: &Rule, items: &[ItemKey], cursor: &Cursor) -> Option<Step>
         }
         Rule::Grouped { by, groups, within } => {
             grouped::previous(*by, *groups, *within, &catalog, &cursor.state, from)?
+        }
+        Rule::Weighted { .. } => {
+            let State::Weighted(state) = &cursor.state else {
+                return None;
+            };
+            let (item, state) = weighted::previous(&catalog, state)?;
+            (item, State::Weighted(state))
         }
     };
     Some(Step {

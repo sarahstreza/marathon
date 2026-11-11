@@ -7,7 +7,7 @@ use marathon_api::ScanReport;
 use tokio::sync::Mutex;
 
 use crate::catalog;
-use crate::config::{Config, ConfigError, SourceConfig, expand_home};
+use crate::config::{Config, ConfigError, Entry, SourceConfig, expand_home};
 use crate::db::{ChannelRow, Db, OpenError, SourceDef};
 use crate::jellyfin::JellyfinError;
 use crate::relay::Relay;
@@ -172,20 +172,28 @@ async fn sync_definitions(db: &Db, config: &Config) -> Result<(), crate::Error> 
         .channels
         .iter()
         .map(|channel| {
+            // A record of what the channel was configured with; playback
+            // reads definitions from config, not from here.
             let selectors = channel
                 .items
                 .iter()
-                .map(|s| {
-                    serde_json::json!({
+                .map(|entry| match entry {
+                    Entry::Items(s) => serde_json::json!({
                         "source": s.source,
                         "path": s.relative_path(),
                         "recursive": s.recursive,
-                    })
+                        "weight": s.weight,
+                    }),
+                    Entry::Channel(c) => serde_json::json!({
+                        "channel": c.channel,
+                        "weight": c.weight,
+                    }),
                 })
                 .collect::<Vec<_>>();
             Ok(ChannelRow {
                 id: channel.id.clone(),
-                number: i64::from(channel.number),
+                // Unnumbered (hidden) channels are stored, and listed, as 0.
+                number: i64::from(channel.number.unwrap_or(0)),
                 name: channel.name.clone(),
                 rule_json: serde_json::to_string(&channel.rule)?,
                 selectors_json: serde_json::to_string(&selectors)?,

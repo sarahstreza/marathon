@@ -257,6 +257,10 @@ Rules are data, composed from a small set of primitives:
 - `grouped { by, groups, within }` — partition items (`by = "season" | "folder"`),
   order the groups with `groups` (`ordered` | `shuffled`), and order items within
   each group with `within`. Taskmaster is `grouped(season, shuffled, ordered)`.
+- `weighted { by }` (M11) — pick at random in proportion to caller-supplied
+  weights, never the same item twice in a row. `by` (`manual` | `item_count` |
+  `duration`) only tells the server how to compute weights; the engine takes
+  them through `next_weighted`.
 
 API shape (illustrative):
 
@@ -293,10 +297,13 @@ items         (id TEXT PK, source_id TEXT, path TEXT, size INTEGER, mtime INTEGE
 channels      (id TEXT PK, number INTEGER, name TEXT, rule_json TEXT, selectors_json TEXT)
 channel_items (channel_id TEXT, item_id TEXT, PRIMARY KEY(channel_id, item_id))
 channel_state (channel_id TEXT PK, item_id TEXT, position_ms INTEGER,
-               cursor_json TEXT, updated_at INTEGER)
+               cursor_json TEXT, updated_at INTEGER,
+               children_json TEXT)  -- M11: an independent parent's states for its children
 events        (id TEXT PK, ts INTEGER, client_id TEXT, channel_id TEXT,
-               item_id TEXT, kind TEXT, position_ms INTEGER)
+               item_id TEXT, kind TEXT, position_ms INTEGER,
+               resolved_channel_id TEXT, resolution_path_json TEXT)  -- M11
                -- kind: tuned | progress | ended | skipped | previous | paused | resumed
+               -- channel_id: the channel tuned to; resolved_channel_id: the one the item came from
 ```
 
 - Channels in config are upserted into `channels` on startup; config is
@@ -320,11 +327,12 @@ via `http-header-fields`).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health`, `/version` | Liveness, API version |
-| GET | `/channels` | List channels with current item summary |
+| GET | `/channels` | List channels with current item summary, in guide order. Hidden channels (M11) only with `?include_hidden=true` |
 | GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch |
 | POST | `/channels/{id}/progress` | `{item_id, position_ms, duration_ms?, paused}` |
 | POST | `/channels/{id}/advance` | `{from_item_id, reason: "ended" \| "skipped"}` → new `now`. **Idempotent:** if `from_item_id` is not the channel's current item, return the current `now` without advancing |
 | POST | `/channels/{id}/previous` | `{from_item_id}` → new `now`. Step back via the rule's `previous`; idempotent like `advance` |
+| GET | `/channels/{id}/plan?items=&hours=` | M11: what the channel will play from its current item on, by stepping copies of its state (and its children's) exactly as playback would |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
@@ -861,6 +869,131 @@ because it's display-only, like the desktop's. Going to the background is
   at the same item and position (and vice versa).
 - [manual] Backgrounding the app pauses playback and reports progress; returning
   resumes.
+
+### M11 — Nested channels
+
+Channels can contain other channels as entries, alongside ordinary path
+selectors. A parent channel's rule picks an entry; if the entry is a child
+channel, the server resolves it to that child's current item. Example: a
+"Video Essayists" channel that rotates between the "Hbomberguy",
+"Contrapoints", and "Folding Ideas" channels plus a misc-essays folder.
+
+Config:
+
+    [[channel]]
+    id = "essayists"
+    number = 10
+    name = "Video Essayists"
+    items = [
+      { channel = "hbomberguy" },
+      { channel = "contrapoints" },
+      { channel = "folding-ideas" },
+      { source = "nas", path = "YouTube/Misc Essays", recursive = true },
+    ]
+    rule = { kind = "shuffled" }
+    state = "shared"   # or "independent"
+
+    [[channel]]
+    id = "contrapoints"
+    name = "Contrapoints"
+    hidden = true      # excluded from guide and channel up/down; still a valid child
+    items = [{ source = "nas", path = "YouTube/Contrapoints" }]
+    rule = { kind = "ordered" }
+
+Semantics:
+- **Entries.** A channel's entries are items and/or child channel references.
+  `marathon-rules` stays generic: it picks an entry and returns a cursor, and
+  does not know whether an entry is an item or a channel. Resolution of child
+  channels to items happens in `marathon-server`.
+- **`state = "shared"` (default).** The parent delegates to the child: the
+  parent's `now` is the child's `now`, progress updates the child's
+  `channel_state`, and when the item ends or is skipped the child advances and
+  the parent's rule then picks the next entry. Watching through the parent or
+  directly on the child is the same playback position. Resuming a child that
+  was left mid-item resumes mid-item.
+- **`state = "independent"`.** The parent keeps its own cursor and position per
+  child (stored in the parent's state). The child channel's own state is never
+  read or written.
+- **`weighted` rule.** New rule kind for choosing among entries:
+  `{ kind = "weighted", by = "manual" | "item_count" | "duration" }`, with
+  optional per-entry `weight = N` for `manual`. Selection is seeded and
+  deterministic like the other rules, and avoids picking the same entry twice
+  in a row when there are 2+ entries.
+- **Validation.** Config load rejects cycles (a channel that contains itself
+  directly or transitively), references to unknown channel ids, and nesting
+  deeper than a fixed limit (default 8), each with a clear error naming the
+  channels involved.
+- **Keeps going.** A child with no playable items is skipped and an `Error`
+  event emitted; the M3.5 consecutive-failure cap applies across the whole
+  resolution chain, so a parent whose children are all empty stops rather
+  than looping.
+- **Hidden channels.** `hidden = true` channels are excluded from the guide,
+  `ChannelUp`/`ChannelDown`, and `GoToChannel(number)`, but remain reachable by
+  `GoToChannelId` and the API.
+- **Visibility of the chain.** `now`, `NowPlaying`, and `ChannelChanged`
+  include the resolution path (e.g. `["essayists", "contrapoints"]`). The
+  banner and guide show it as "Video Essayists · Contrapoints: Envy". Events
+  record both the channel that resolved the item and the channel the viewer
+  was tuned to.
+- **Offline planning.** Planning N items or N hours ahead for a parent steps
+  copies of the parent's and children's cursors together, producing the same
+  sequence live playback would.
+
+**Complete when:**
+- [auto] `marathon-rules` has no knowledge of channels; existing rule property
+  tests pass unchanged with entries that represent child channels.
+- [auto] `weighted` property tests: over many picks, selection frequency is
+  within tolerance of the configured weights; no immediate repeats with 2+
+  entries; same seed gives the same sequence; cursor round-trips through JSON.
+- [auto] Config validation tests: direct cycle, indirect cycle (A→B→C→A),
+  unknown child id, and over-depth nesting are each rejected with an error
+  naming the offending channels; a valid diamond (two parents sharing a child)
+  is accepted.
+- [auto] Shared-state test: playing an item through the parent advances the
+  child's `channel_state`; then tuning directly to the child shows the same
+  item and position, and vice versa.
+- [auto] Shared-state skip test: `NextItem` on the parent advances the child
+  past the skipped item and lets the parent's rule pick the next entry.
+- [auto] Independent-state test: playing through the parent never changes the
+  child's `channel_state`; the parent's per-child positions survive restart.
+- [auto] Mixed entries: a parent with child channels and a path selector picks
+  from both according to its rule.
+- [auto] Empty-child test: a child with zero playable items is skipped with an
+  `Error` event; a parent whose children are all empty stops after the failure
+  cap.
+- [auto] Hidden channels are absent from `GET /channels` guide ordering and
+  `ChannelUp`/`ChannelDown`/`GoToChannel`, but `GoToChannelId` reaches them.
+- [auto] `now`, `NowPlaying`, `ChannelChanged`, and history include the
+  resolution path; OpenAPI documents the new fields.
+- [auto] Offline plan test: planning a parent ahead and then playing it live
+  produces the identical item sequence.
+- [auto] `idempotent advance` still holds through the parent: two `advance`
+  calls with the same `from_item_id` on a parent advance once.
+- [manual] A "Video Essayists"-style channel in the test library rotates
+  between child channels as its rule dictates, and the banner shows
+  "Parent · Child: Title".
+- [manual] Watching a child through the parent, quitting, and tuning to the
+  child directly resumes at the right item and position (shared state).
+- [manual] Hidden child channels don't appear in the guide or when flipping
+  channels.
+- [manual] An invalid config (e.g. a cycle) fails at startup with a message a
+  user can act on, rather than a panic or a hang.
+
+As built: child channel entries reach the rules engine as items with ID
+`channel:<id>` and path `channels/<id>`, so `ordered` plays children in
+order of channel ID, and grouping by folder puts them in one group. A path
+selector's entries are its individual items (its `weight` applies to each);
+to weigh a folder as one entry, make it a hidden child channel. `previous`
+undoes `advance`: the parent steps back, and if it lands on a child, the
+child steps back too. Resolution lives in `marathon-server`'s `nested`
+module, over preloaded data with no database access, so `now`'s `next`,
+plans, and live requests all run the same code; a state created while
+resolving a parent gets a seed derived from the parent's, so plans predict
+it. Independent parents store their children's states by address
+(`child`, `child>grandchild`) in `channel_state.children_json`. The server
+skips at most 5 empty children per request (the client's failure cap) and
+reports each skip in `Now.warnings`, which clients emit as `Error` events.
+A hidden channel may omit `number`; the API reports it as `0`.
 
 ### After the MVP (not now)
 
