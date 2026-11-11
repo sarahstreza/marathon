@@ -66,7 +66,8 @@ pub enum ScanError {
 /// Lists every video under `root`, with sidecar subtitles attached.
 ///
 /// Hidden files and directories (names starting with `.`) are skipped, as
-/// are names that are not valid UTF-8. Symlinks to files are followed;
+/// are names that are not valid UTF-8 and release samples (see
+/// [`is_sample`]). Symlinks to files are followed;
 /// symlinks to directories are not, which rules out cycles. The result is
 /// sorted by path.
 pub fn scan_filesystem(root: &Path) -> Result<Vec<ScannedFile>, ScanError> {
@@ -114,6 +115,9 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ScannedFile>, ScanError> {
                 _ => continue,
             };
             match extension(&name) {
+                Some(ext) if VIDEO_EXTENSIONS.contains(&ext.as_str()) && is_sample(&name) => {
+                    tracing::debug!(path = %rel, "skipping release sample");
+                }
                 Some(ext) if VIDEO_EXTENSIONS.contains(&ext.as_str()) => {
                     videos.push((name, rel, meta));
                 }
@@ -207,6 +211,19 @@ fn extension(name: &str) -> Option<String> {
     (!stem.is_empty()).then(|| ext.to_ascii_lowercase())
 }
 
+/// Returns `true` for a release sample: a short preview clip that download
+/// tools leave next to the real file, named like it plus `.sample`
+/// (`Show - 1x01 - Pilot.sample.mkv`, also `-sample`, `_sample`, or just
+/// `sample.mkv`). Playing one would put a duplicate, truncated episode on a
+/// channel.
+fn is_sample(name: &str) -> bool {
+    let stem = stem(name).to_ascii_lowercase();
+    stem == "sample"
+        || stem
+            .strip_suffix("sample")
+            .is_some_and(|rest| rest.ends_with(['.', '-', '_']))
+}
+
 /// A file name without its extension.
 fn stem(name: &str) -> &str {
     match name.rsplit_once('.') {
@@ -245,6 +262,8 @@ mod tests {
         touch(root, "Show/Season 1/orphan.srt");
         touch(root, "Show/notes.txt");
         touch(root, "Show/.hidden.mkv");
+        touch(root, "Show/Season 1/Show - S01E02 - Next.sample.mkv");
+        touch(root, "Show/Season 1/sample.mkv");
         touch(root, ".trash/old.mkv");
         touch(root, "Top.MP4");
 
@@ -316,6 +335,15 @@ mod tests {
         let files = scan_filesystem(root).unwrap();
         let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["link.mkv", "real/a.mkv"]);
+    }
+
+    #[test]
+    fn samples() {
+        assert!(is_sample("Weeds - 8x01 - Messy.sample.mkv"));
+        assert!(is_sample("show-SAMPLE.avi"));
+        assert!(is_sample("Sample.mkv"));
+        assert!(!is_sample("Free Sample.mkv"));
+        assert!(!is_sample("Sampler.mkv"));
     }
 
     #[test]
