@@ -286,6 +286,9 @@ pub enum ErrorCode {
     /// A progress report named an item that is not the channel's current
     /// item (another client moved the channel on). Re-fetch `now`.
     StaleItem,
+    /// A source the server depends on (a Jellyfin server) failed or could
+    /// not be reached (status 502).
+    Upstream,
     /// Something went wrong on the server.
     Internal,
 }

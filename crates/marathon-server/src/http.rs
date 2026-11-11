@@ -34,6 +34,7 @@ use utoipa::OpenApi;
 use crate::app::App;
 use crate::error::ApiError;
 use crate::playback::subtitles_of;
+use crate::sources::Source;
 
 /// Default and maximum `limit` for `GET /history`.
 const HISTORY_DEFAULT_LIMIT: u32 = 50;
@@ -247,27 +248,35 @@ async fn item(State(app): State<App>, Path(id): Path<String>) -> Result<Json<Ite
 }
 
 #[utoipa::path(get, path = "/api/v1/stream/{item_id}", tag = "library",
-    description = "The item's media bytes. Supports `Range` requests and `HEAD`.",
+    description = "The item's media bytes. Supports `Range` requests and `HEAD`. Items from a \
+                   Jellyfin source are proxied from Jellyfin, ranges included.",
     params(("item_id" = String, Path, description = "Item ID")),
     responses(
         (status = 200, description = "The whole file", content_type = "application/octet-stream"),
         (status = 206, description = "The requested range", content_type = "application/octet-stream"),
         (status = 404, description = "No such item, or its file is missing", body = ErrorBody),
         (status = 416, description = "The range cannot be satisfied"),
+        (status = 502, description = "The item's Jellyfin server failed or is unreachable",
+            body = ErrorBody),
     ))]
 async fn stream(
     State(app): State<App>,
     Path(item_id): Path<String>,
     req: Request,
 ) -> Result<Response, ApiError> {
-    let file = media_path(&app, &item_id).await?;
-    // ServeFile handles Range, If-Range, conditional requests, and HEAD,
-    // and returns 404 itself if the file has vanished since the last scan.
-    let response = match ServeFile::new(file).oneshot(req).await {
-        Ok(response) => response,
-        Err(never) => match never {},
-    };
-    Ok(response.map(Body::new))
+    match media(&app, &item_id).await? {
+        Media::File(file) => {
+            // ServeFile handles Range, If-Range, conditional requests, and
+            // HEAD, and returns 404 itself if the file has vanished since
+            // the last scan.
+            let response = match ServeFile::new(file).oneshot(req).await {
+                Ok(response) => response,
+                Err(never) => match never {},
+            };
+            Ok(response.map(Body::new))
+        }
+        Media::Jellyfin { client, id } => client.stream(&id, req.method(), req.headers()).await,
+    }
 }
 
 #[utoipa::path(get, path = "/api/v1/subtitles/{item_id}/{n}", tag = "library",
@@ -526,8 +535,17 @@ async fn fallback() -> ApiError {
 
 // --- Files ----------------------------------------------------------------
 
-/// The file backing a playable item.
-async fn media_path(app: &App, item_id: &str) -> Result<PathBuf, ApiError> {
+/// Where a playable item's bytes come from.
+enum Media {
+    File(PathBuf),
+    Jellyfin {
+        client: std::sync::Arc<crate::jellyfin::JellyfinClient>,
+        id: String,
+    },
+}
+
+/// Finds where to stream a playable item from.
+async fn media(app: &App, item_id: &str) -> Result<Media, ApiError> {
     let not_found = || ApiError::NotFound(format!("no item {item_id}"));
     let row = app.db().item(item_id).await?.ok_or_else(not_found)?;
     if row.missing {
@@ -535,8 +553,15 @@ async fn media_path(app: &App, item_id: &str) -> Result<PathBuf, ApiError> {
             "item {item_id} is missing from its source"
         )));
     }
-    let root = app.source_root(&row.source_id).ok_or_else(not_found)?;
-    safe_join(&root, &row.path).ok_or_else(not_found)
+    match app.source(&row.source_id).ok_or_else(not_found)? {
+        Source::Filesystem { root } => safe_join(root, &row.path)
+            .map(Media::File)
+            .ok_or_else(not_found),
+        Source::Jellyfin(client) => Ok(Media::Jellyfin {
+            client: client.clone(),
+            id: row.external_id.ok_or_else(not_found)?,
+        }),
+    }
 }
 
 /// Joins a stored relative path onto a source root, refusing anything that

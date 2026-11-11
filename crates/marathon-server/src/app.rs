@@ -9,7 +9,9 @@ use tokio::sync::Mutex;
 use crate::catalog;
 use crate::config::{Config, ConfigError, SourceConfig, expand_home};
 use crate::db::{ChannelRow, Db, OpenError, SourceDef};
+use crate::jellyfin::JellyfinError;
 use crate::relay::Relay;
+use crate::sources::{Source, Sources};
 
 /// File name of the SQLite database inside `data_dir`.
 pub const DATABASE_FILE: &str = "marathon.db";
@@ -31,6 +33,12 @@ pub enum StartError {
     Sync(#[source] crate::Error),
     #[error("initial library scan failed")]
     Scan(#[source] crate::Error),
+    #[error("cannot set up source {id}")]
+    Source {
+        id: String,
+        #[source]
+        source: JellyfinError,
+    },
     #[error("cannot listen on {addr}")]
     Bind {
         addr: std::net::SocketAddr,
@@ -57,6 +65,8 @@ pub(crate) struct Inner {
     pub(crate) scanning: Mutex<()>,
     /// Connected clients' control channels and the event stream.
     pub(crate) relay: Relay,
+    /// Each source's root directory or Jellyfin client.
+    pub(crate) sources: Sources,
 }
 
 impl App {
@@ -77,6 +87,8 @@ impl App {
     /// [`Db::open_in_memory`] in tests). Ignores `config.server.data_dir`.
     pub async fn with_db(config: Config, db: Db) -> Result<Self, StartError> {
         config.validate()?;
+        let sources = Sources::from_config(&config)
+            .map_err(|(id, source)| StartError::Source { id, source })?;
         sync_definitions(&db, &config)
             .await
             .map_err(StartError::Sync)?;
@@ -87,6 +99,7 @@ impl App {
                 playback: Mutex::new(()),
                 scanning: Mutex::new(()),
                 relay: Relay::new(),
+                sources,
             }),
         };
         let report = app.rescan().await.map_err(StartError::Scan)?;
@@ -113,20 +126,21 @@ impl App {
     /// calls run one after another.
     pub async fn rescan(&self) -> Result<ScanReport, crate::Error> {
         let _guard = self.inner.scanning.lock().await;
-        catalog::rescan(&self.inner.db, &self.inner.config).await
+        catalog::rescan(&self.inner.db, &self.inner.config, &self.inner.sources).await
+    }
+
+    /// A configured source, ready to scan or stream from.
+    pub(crate) fn source(&self, source_id: &str) -> Option<&Source> {
+        self.inner.sources.get(source_id)
     }
 
     /// The root directory of a configured filesystem source, with `~`
-    /// expanded.
+    /// expanded. `None` for other kinds of source.
     pub(crate) fn source_root(&self, source_id: &str) -> Option<PathBuf> {
-        self.inner
-            .config
-            .sources
-            .iter()
-            .find(|s| s.id() == source_id)
-            .map(|s| match s {
-                SourceConfig::Filesystem { root, .. } => expand_home(root),
-            })
+        match self.source(source_id)? {
+            Source::Filesystem { root } => Some(root.clone()),
+            Source::Jellyfin(_) => None,
+        }
     }
 }
 
@@ -137,16 +151,20 @@ async fn sync_definitions(db: &Db, config: &Config) -> Result<(), crate::Error> 
         .sources
         .iter()
         .map(|source| {
-            let (kind, config_json) = match source {
-                SourceConfig::Filesystem { root, .. } => (
-                    "filesystem",
-                    serde_json::json!({ "root": root.to_string_lossy() }).to_string(),
-                ),
+            // Never the Jellyfin API key: the database is not a place
+            // for credentials.
+            let config_json = match source {
+                SourceConfig::Filesystem { root, .. } => {
+                    serde_json::json!({ "root": root.to_string_lossy() })
+                }
+                SourceConfig::Jellyfin { url, libraries, .. } => {
+                    serde_json::json!({ "url": url, "libraries": libraries })
+                }
             };
             SourceDef {
                 id: source.id().to_owned(),
-                kind: kind.to_owned(),
-                config_json,
+                kind: source.kind().to_owned(),
+                config_json: config_json.to_string(),
             }
         })
         .collect::<Vec<_>>();

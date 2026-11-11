@@ -17,6 +17,8 @@ marathon-rules.workspace = true
 axum = { workspace = true, features = ["ws"] }
 futures-util.workspace = true
 regex.workspace = true
+# Jellyfin's API, and proxying its streams (`stream`).
+reqwest = { workspace = true, features = ["stream"] }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
@@ -32,7 +34,7 @@ uuid.workspace = true
 [dev-dependencies]
 http-body-util.workspace = true
 oas3.workspace = true
-# HTTP and WebSocket clients for the relay tests over a real socket.
-reqwest.workspace = true
+# WebSocket client for the relay tests over a real socket.
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
+tracing-subscriber.workspace = true

@@ -96,6 +96,17 @@ impl Config {
             if !source_ids.insert(source.id()) {
                 return invalid(format!("duplicate source id {:?}", source.id()));
             }
+            if let SourceConfig::Jellyfin {
+                id, url, api_key, ..
+            } = source
+            {
+                validate_jellyfin_url(url).map_err(|reason| {
+                    ConfigError::Invalid(format!("source {id:?}: url {url:?} {reason}"))
+                })?;
+                if api_key.expose().trim().is_empty() {
+                    return invalid(format!("source {id:?}: api_key is empty"));
+                }
+            }
         }
 
         let mut channel_ids = HashSet::new();
@@ -132,6 +143,27 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// Checks a Jellyfin server URL: plain `http(s)://host[:port][/path]`, with
+/// no credentials in it (those belong in `api_key`, which is kept out of
+/// logs; a URL is not).
+fn validate_jellyfin_url(url: &str) -> Result<(), &'static str> {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .ok_or("must start with http:// or https://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() {
+        return Err("has no host");
+    }
+    if authority.contains('@') {
+        return Err("must not contain credentials; put the API key in api_key");
+    }
+    if url.contains(['?', '#']) {
+        return Err("must not have a query or fragment");
+    }
+    Ok(())
 }
 
 /// Expands a leading `~` in `path` to the user's home directory (from
@@ -179,14 +211,60 @@ impl fmt::Debug for ServerConfig {
 pub enum SourceConfig {
     /// A local directory (including mounted SMB/NFS shares).
     Filesystem { id: String, root: PathBuf },
+    /// A Jellyfin server (PLAN.md M8). Its libraries appear as top-level
+    /// folders named after the library (`TV Shows/The Office (US)/...`),
+    /// and its streams are proxied through Marathon.
+    Jellyfin {
+        id: String,
+        /// The Jellyfin server's base URL, e.g. `http://jellyfin.lan:8096`.
+        url: String,
+        /// An API key, from Jellyfin's Dashboard → API Keys. Never logged
+        /// or returned by the API.
+        api_key: Secret,
+        /// Only scan these libraries (by name). Default: all of them.
+        #[serde(default)]
+        libraries: Option<Vec<String>>,
+    },
 }
 
 impl SourceConfig {
     /// The source's config-assigned ID, referenced by channel item selectors.
     pub fn id(&self) -> &str {
         match self {
-            SourceConfig::Filesystem { id, .. } => id,
+            SourceConfig::Filesystem { id, .. } | SourceConfig::Jellyfin { id, .. } => id,
         }
+    }
+
+    /// The source's `kind` as written in config.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            SourceConfig::Filesystem { .. } => "filesystem",
+            SourceConfig::Jellyfin { .. } => "jellyfin",
+        }
+    }
+}
+
+/// A credential from config. Its `Debug` output is `<redacted>`, so it
+/// cannot leak into logs by accident; use [`Secret::expose`] where the
+/// value is really needed.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// The secret itself.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
     }
 }
 
@@ -300,6 +378,61 @@ mod tests {
     fn rejects_unknown_keys() {
         let err = Config::from_toml_str(&format!("{MINIMAL}\nbnid = \"x\"")).unwrap_err();
         assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    fn jellyfin(url: &str, key: &str) -> String {
+        format!(
+            "{MINIMAL}\n[[source]]\nid = \"jf\"\nkind = \"jellyfin\"\nurl = \"{url}\"\napi_key = \"{key}\""
+        )
+    }
+
+    #[test]
+    fn jellyfin_sources_parse_and_validate() {
+        let config = Config::from_toml_str(&jellyfin("http://jf.lan:8096", "abc123")).unwrap();
+        config.validate().unwrap();
+        let SourceConfig::Jellyfin {
+            url,
+            api_key,
+            libraries,
+            ..
+        } = &config.sources[0]
+        else {
+            panic!("not jellyfin: {:?}", config.sources[0]);
+        };
+        assert_eq!(url, "http://jf.lan:8096");
+        assert_eq!(api_key.expose(), "abc123");
+        assert_eq!(libraries, &None);
+        assert_eq!(config.sources[0].kind(), "jellyfin");
+
+        for (url, key, why) in [
+            ("jf.lan:8096", "k", "http"),
+            ("ftp://jf.lan", "k", "http"),
+            ("http://", "k", "no host"),
+            ("http://me:pw@jf.lan", "k", "credentials"),
+            ("http://jf.lan/?api_key=k", "k", "query"),
+            ("http://jf.lan", " ", "api_key is empty"),
+        ] {
+            let err = Config::from_toml_str(&jellyfin(url, key))
+                .unwrap()
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(why), "{url}: {err}");
+        }
+    }
+
+    #[test]
+    fn debug_output_redacts_the_jellyfin_key() {
+        let config = Config::from_toml_str(&jellyfin("http://jf.lan", "s3cret-key")).unwrap();
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("s3cret-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        // Validation errors name the source, never the key.
+        let err = Config::from_toml_str(&jellyfin("http://u:p@jf.lan", "s3cret-key"))
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert!(!err.to_string().contains("s3cret-key"));
     }
 
     #[test]

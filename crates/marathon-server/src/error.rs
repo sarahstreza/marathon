@@ -36,6 +36,10 @@ pub enum ApiError {
         reported: String,
         current: String,
     },
+    /// A source the server depends on (a Jellyfin server) failed or could
+    /// not be reached.
+    #[error("{0}")]
+    Upstream(String),
     #[error("internal error")]
     Internal(#[from] Error),
 }
@@ -60,6 +64,7 @@ impl ApiError {
             ApiError::NotFound(_) => ErrorCode::NotFound,
             ApiError::ChannelEmpty(_) => ErrorCode::ChannelEmpty,
             ApiError::StaleItem { .. } => ErrorCode::StaleItem,
+            ApiError::Upstream(_) => ErrorCode::Upstream,
             ApiError::Internal(_) => ErrorCode::Internal,
         }
     }
@@ -70,6 +75,7 @@ impl ApiError {
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ChannelEmpty(_) | ApiError::StaleItem { .. } => StatusCode::CONFLICT,
+            ApiError::Upstream(_) => StatusCode::BAD_GATEWAY,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -77,6 +83,9 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let ApiError::Upstream(message) = &self {
+            tracing::warn!(%message, "upstream source failed");
+        }
         if let ApiError::Internal(err) = &self {
             // Log the full chain; the client only gets a generic message.
             let mut chain = err.to_string();
