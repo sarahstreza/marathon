@@ -27,6 +27,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions {
+        // Unit tests run on the JVM against android.jar's stubs.
+        unitTests.isReturnDefaultValues = true
+    }
+
     lint {
         warningsAsErrors = false
         abortOnError = true
@@ -47,7 +52,6 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.core.ktx)
     implementation(libs.lifecycle.runtime.compose)
-    implementation(libs.tv.material)
     implementation(libs.libmpv)
 
     testImplementation(platform(libs.junit.bom))
