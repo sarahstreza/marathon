@@ -1,15 +1,14 @@
-//! The client library against a real server: `HttpApi` talking to
-//! `marathon-server` on a loopback port, and the `Tuner` driving a mock
-//! player through it. This checks that client and server agree on the
-//! wire format and semantics, which the tuner's unit tests (against an
-//! in-memory fake) cannot.
+//! The client library against a real server: `HttpApi` talking to an
+//! `EmbeddedServer` (what `--embedded` runs) on its loopback port, and the
+//! `Tuner` driving a mock player through it. This checks that client and
+//! server agree on the wire format and semantics, which the tuner's unit
+//! tests (against an in-memory fake) cannot.
 //!
 //! It lives in the desktop crate because that is the only crate allowed to
 //! depend on both (PLAN.md §4).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -17,8 +16,8 @@ use marathon_api::{Action, AdvanceReason, AdvanceRequest, ErrorCode, EventKind, 
 use marathon_client::api::{Api, ApiError, HttpApi};
 use marathon_client::player::{LoadRequest, Player, PlayerError, PlayerEvent};
 use marathon_client::tuner::{SystemClock, Tuner, TunerConfig};
-use marathon_server::Server;
 use marathon_server::config::Config;
+use marathon_server::embedded::EmbeddedServer;
 use tempfile::TempDir;
 
 const VIDEOS: &[&str] = &[
@@ -30,12 +29,11 @@ const VIDEOS: &[&str] = &[
     "Other/Clip B.mkv",
 ];
 
-/// A server on 127.0.0.1:0 over a temp library, stopped on drop.
+/// An embedded server over a temp library, stopped on drop.
 struct TestServer {
-    addr: SocketAddr,
+    // Declared first so it stops before the directory is deleted.
+    server: EmbeddedServer,
     _dir: TempDir,
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl TestServer {
@@ -47,50 +45,16 @@ impl TestServer {
             std::fs::write(&path, rel.as_bytes()).unwrap();
         }
         let config = Config::from_toml_str(&config_toml(dir.path(), token)).unwrap();
-        let (addr_tx, addr_rx) = std::sync::mpsc::channel();
-        let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
-        let thread = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                let server = Server::bind(config).await.unwrap();
-                addr_tx.send(server.local_addr()).unwrap();
-                server
-                    .serve(async {
-                        let _ = stop.await;
-                    })
-                    .await
-                    .unwrap();
-            });
-        });
-        let addr = addr_rx.recv().unwrap();
-        Self {
-            addr,
-            _dir: dir,
-            shutdown: Some(shutdown),
-            thread: Some(thread),
-        }
+        let server = EmbeddedServer::start(config).unwrap();
+        Self { server, _dir: dir }
     }
 
     fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        self.server.base_url()
     }
 
     fn api(&self, client_id: &str) -> HttpApi {
         HttpApi::new(&self.url(), None, client_id).unwrap()
-    }
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
-        }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
