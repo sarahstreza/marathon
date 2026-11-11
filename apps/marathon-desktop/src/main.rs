@@ -13,7 +13,7 @@
 //! How the pieces fit (PLAN.md §9):
 //!
 //! ```text
-//! platform (window, keys) ──────────────► input sources ──Action──► action bus
+//! platform (window, keys, mouse) ─────────► input sources ──Action──► action bus
 //!                                                                         │ route()
 //!                        ◄── fullscreen / quit ───────────────────────────┤
 //!                                                                         ▼
@@ -56,6 +56,7 @@ use marathon_client::bus::{ActionBus, BusClosed};
 use marathon_client::client_id;
 use marathon_client::input::InputSources;
 use marathon_client::keyboard::KeyboardSource;
+use marathon_client::mouse::MouseSource;
 use marathon_client::tuner::{SystemClock, Tuner, TunerConfig};
 use marathon_mpv::Mpv;
 use marathon_server::config::Config;
@@ -221,6 +222,8 @@ fn main() -> anyhow::Result<()> {
     let mut inputs = InputSources::new();
     let (keyboard, keys) = KeyboardSource::new();
     inputs.start(Box::new(keyboard), &bus)?;
+    let (mouse_source, mouse) = MouseSource::new();
+    inputs.start(Box::new(mouse_source), &bus)?;
 
     let (overlay, overlay_feed) = {
         let window = window.clone();
@@ -266,7 +269,7 @@ fn main() -> anyhow::Result<()> {
         },
         mpv,
         overlay,
-        InputFeeds { keys },
+        InputFeeds { keys, mouse },
         app,
     );
 

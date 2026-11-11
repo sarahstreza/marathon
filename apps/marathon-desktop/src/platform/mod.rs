@@ -4,8 +4,8 @@
 //!
 //! It owns the event loop and the window, gives the
 //! [`Renderer`](crate::renderer::Renderer) a [`Surface`](crate::surface::Surface),
-//! and turns key events into [`Key`](marathon_client::keyboard::Key)s for
-//! the keyboard input source. The rest of the app talks to it only
+//! turns key and mouse events into the input sources' own types, and hides
+//! the cursor when the mouse is idle. The rest of the app talks to it only
 //! through [`PlatformHandle`] and [`Hooks`].
 //!
 //! The loop:
@@ -17,21 +17,24 @@
 //!   them and redraws if they changed what is on screen.
 //! - A redraw draws video and overlay and presents (vsynced).
 //! - Between events the loop sleeps (`ControlFlow::Wait`, or `WaitUntil`
-//!   the next overlay fade). Only while an overlay fade is
+//!   the next overlay fade or cursor hide). Only while an overlay fade is
 //!   running does it redraw continuously, at the display's refresh rate.
 
+mod cursor;
 mod gl;
 mod keys;
 
 use std::time::Instant;
 
 use marathon_client::keyboard::KeyFeed;
+use marathon_client::mouse::{MouseFeed, MouseInput};
 use marathon_mpv::Mpv;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::WindowId;
 
+use self::cursor::CursorIdle;
 use self::gl::GlWindowSurface;
 use crate::overlay::Overlay;
 use crate::overlay::fade::Wake;
@@ -88,6 +91,7 @@ impl PlatformHandle {
 /// Where the platform sends local input.
 pub struct InputFeeds {
     pub keys: KeyFeed,
+    pub mouse: MouseFeed,
 }
 
 /// The event loop, before it runs.
@@ -122,6 +126,7 @@ impl Platform {
             mpv,
             overlay,
             input,
+            cursor: CursorIdle::new(Instant::now()),
             hooks: Box::new(hooks),
             proxy: self.event_loop.create_proxy(),
             graphics: None,
@@ -148,6 +153,7 @@ struct App {
     mpv: Mpv,
     overlay: Overlay,
     input: InputFeeds,
+    cursor: CursorIdle,
     hooks: Box<dyn Hooks>,
     proxy: EventLoopProxy<UserEvent>,
     graphics: Option<Graphics>,
@@ -168,6 +174,15 @@ impl App {
             })
         }?;
         Ok(Graphics { renderer, surface })
+    }
+
+    /// The mouse was moved or used: show the cursor.
+    fn mouse_active(&mut self) {
+        if self.cursor.moved(Instant::now())
+            && let Some(g) = &self.graphics
+        {
+            g.surface.window().set_cursor_visible(true);
+        }
     }
 
     fn shut_down(&mut self, event_loop: &ActiveEventLoop) {
@@ -243,17 +258,38 @@ impl ApplicationHandler<UserEvent> for App {
                     self.input.keys.press(key, event.repeat);
                 }
             }
+            WindowEvent::CursorMoved { .. } => self.mouse_active(),
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.mouse_active();
+                self.input.mouse.input(match delta {
+                    MouseScrollDelta::LineDelta(_, y) => MouseInput::WheelLines(y.into()),
+                    MouseScrollDelta::PixelDelta(p) => MouseInput::WheelPixels(p.y),
+                });
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button,
+                ..
+            } => {
+                self.mouse_active();
+                if button == MouseButton::Left {
+                    self.input.mouse.input(MouseInput::Click);
+                }
+            }
             _ => {}
         }
     }
 
     /// Runs after each batch of events: keeps an overlay fade animating,
-    /// and decides how long to sleep.
+    /// hides an idle cursor, and decides how long to sleep.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let Some(g) = &self.graphics else {
             return;
         };
         let now = Instant::now();
+        if self.cursor.tick(now) {
+            g.surface.window().set_cursor_visible(false);
+        }
         let wake = self.overlay.wake(now);
         // Redraw while a fade runs, and once more after the overlay has
         // gone, to clear its last faint frame.
@@ -261,9 +297,17 @@ impl ApplicationHandler<UserEvent> for App {
         {
             g.surface.window().request_redraw();
         }
-        event_loop.set_control_flow(match wake {
-            Wake::At(t) => ControlFlow::WaitUntil(t),
-            Wake::Animating | Wake::Idle => ControlFlow::Wait,
+        let next = match wake {
+            Wake::At(t) => Some(t),
+            Wake::Animating | Wake::Idle => None,
+        };
+        let deadline = match (next, self.cursor.deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.set_control_flow(match deadline {
+            Some(t) => ControlFlow::WaitUntil(t),
+            None => ControlFlow::Wait,
         });
     }
 }
