@@ -1929,6 +1929,7 @@ dependencies = [
  "glutin-winit",
  "marathon-api",
  "marathon-client",
+ "marathon-input-cec",
  "marathon-mpv",
  "marathon-server",
  "raw-window-handle",

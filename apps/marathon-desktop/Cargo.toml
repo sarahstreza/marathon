@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 marathon-api.workspace = true
 marathon-client = { workspace = true, features = ["input-keyboard", "input-mouse", "remote"] }
+marathon-input-cec = { workspace = true, optional = true }
 marathon-mpv.workspace = true
 # For --embedded: runs the server in-process (PLAN.md §9).
 marathon-server.workspace = true
@@ -41,3 +42,7 @@ tokio.workspace = true
 default = ["input-gamepad"]
 # Gamepad input through gilrs (needs libudev on Linux).
 input-gamepad = ["dep:gilrs", "marathon-client/input-gamepad"]
+# The TV's remote over HDMI-CEC, enabled at runtime with --cec (needs
+# libcec: libcec-devel, libcec-dev, or `brew install libcec`). libcec is
+# GPL-2.0-or-later, so builds with this feature are covered by the GPL.
+input-cec = ["dep:marathon-input-cec", "marathon-input-cec/libcec"]

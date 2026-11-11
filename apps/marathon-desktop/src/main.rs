@@ -36,6 +36,8 @@
 //! player. Logging is controlled with `RUST_LOG` (default `info`;
 //! `RUST_LOG=info,mpv=debug` shows mpv's own log).
 
+#[cfg(feature = "input-cec")]
+mod cec;
 mod controller;
 mod overlay;
 mod platform;
@@ -100,6 +102,9 @@ struct Args {
     /// in the user's config directory.
     #[arg(long, value_name = "PATH")]
     client_id_file: Option<PathBuf>,
+    #[cfg(feature = "input-cec")]
+    #[command(flatten)]
+    cec: cec::CecArgs,
 }
 
 impl Args {
@@ -228,6 +233,13 @@ fn main() -> anyhow::Result<()> {
     inputs.start(Box::new(mouse_source), &bus)?;
     #[cfg(feature = "input-gamepad")]
     inputs.start(Box::new(platform::gamepad::GamepadSource::new()), &bus)?;
+    #[cfg(feature = "input-cec")]
+    if let Some(config) = args.cec.config() {
+        use marathon_input_cec::{CecSource, LibCec};
+        // Opening the adapter happens on the source's thread, retrying
+        // until one turns up, so a missing adapter never blocks startup.
+        inputs.start(Box::new(CecSource::new(LibCec::new(), config)), &bus)?;
+    }
     // Remote control through the server: relayed actions arrive on the bus
     // like any other input, and the tuner's events go back up for
     // observers (PLAN.md §9 "Remote adapters").
