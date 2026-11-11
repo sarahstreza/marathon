@@ -45,6 +45,16 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
+  seams:
+    name: platform seams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # marathon-client has no winit/glutin/gilrs dependency, and winit and
+      # glutin appear only in marathon-desktop's platform module (M3.5).
+      - run: scripts/check-seams.sh
+
   test-library:
     name: test library script
     runs-on: ubuntu-latest
