@@ -114,7 +114,8 @@ fn variant_schema<'a>(doc: &'a Value, schema: &str, tag: &str, name: &str) -> &'
 }
 
 /// Asserts that `value` (an example serialized to JSON) has exactly the
-/// properties the schema variant declares, and all of them required.
+/// properties the schema variant declares, and that all of them are
+/// required except those in [`OPTIONAL`].
 fn assert_shape(variant: &Value, value: &Value, what: &str) {
     let keys = |v: &Value| -> BTreeSet<String> { v.as_object().unwrap().keys().cloned().collect() };
     let declared = keys(&variant["properties"]);
@@ -125,8 +126,17 @@ fn assert_shape(variant: &Value, value: &Value, what: &str) {
         .map(|v| v.as_str().unwrap().to_owned())
         .collect();
     assert_eq!(keys(value), declared, "{what}: properties");
-    assert_eq!(required, declared, "{what}: required");
+    let expected: BTreeSet<String> = declared
+        .iter()
+        .filter(|k| !OPTIONAL.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    assert_eq!(required, expected, "{what}: required");
 }
+
+/// Properties added after the first release, which default when absent so
+/// that older clients' events still parse (`resolution_path`, M11).
+const OPTIONAL: &[&str] = &["resolution_path"];
 
 #[test]
 fn every_action_and_event_appears_with_its_json_shape() {

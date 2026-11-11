@@ -354,6 +354,8 @@ async fn history(
                 ts_ms: row.ts,
                 client_id: row.client_id,
                 channel_id: row.channel_id,
+                resolved_channel_id: None,
+                resolution_path: Vec::new(),
                 item_id: row.item_id,
                 kind,
                 position_ms: row.position_ms.and_then(|p| u64::try_from(p).ok()),

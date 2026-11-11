@@ -306,6 +306,7 @@ async fn events_reach_subscribers_within_a_second() {
         channel_id: "show".into(),
         channel_number: 1,
         channel_name: "Test Show".into(),
+        resolution_path: vec!["show".into()],
     };
     let playing = Event::NowPlaying {
         channel_id: "show".into(),
@@ -313,6 +314,7 @@ async fn events_reach_subscribers_within_a_second() {
         item_id: "item-1".into(),
         title: "Test Show · S01E01 · Pilot".into(),
         position_ms: 0,
+        resolution_path: vec!["show".into()],
     };
     for event in [&changed, &playing] {
         let sent = Instant::now();

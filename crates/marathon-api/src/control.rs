@@ -100,12 +100,22 @@ pub enum Event {
         title: String,
         /// Where playback started within the item.
         position_ms: u64,
+        /// The channels the item was resolved through (PLAN.md M11):
+        /// `channel_id` first, then each nested child channel, ending with
+        /// the one the item belongs to. Just `[channel_id]` for an
+        /// ordinary channel; empty from clients older than nested channels.
+        #[serde(default)]
+        resolution_path: Vec<String>,
     },
     /// The client tuned to a different channel.
     ChannelChanged {
         channel_id: String,
         channel_number: u32,
         channel_name: String,
+        /// As for `now_playing`: the channel tuned to, then any child
+        /// channels its current item comes through.
+        #[serde(default)]
+        resolution_path: Vec<String>,
     },
     Paused {
         channel_id: String,
@@ -238,11 +248,13 @@ impl Event {
                 item_id: "0190a1b2-0000-7000-8000-000000000001".into(),
                 title: "The Office · S03E14 · The Injury".into(),
                 position_ms: 5000,
+                resolution_path: vec!["office".into()],
             },
             Event::ChannelChanged {
-                channel_id: "office".into(),
-                channel_number: 1,
-                channel_name: "The Office".into(),
+                channel_id: "essayists".into(),
+                channel_number: 10,
+                channel_name: "Video Essayists".into(),
+                resolution_path: vec!["essayists".into(), "contrapoints".into()],
             },
             Event::Paused {
                 channel_id: "office".into(),
@@ -325,6 +337,10 @@ pub struct ClientPlaying {
     pub item_id: String,
     /// Human-readable description, e.g. `Show · S03E14 · The Injury`.
     pub title: String,
+    /// The channels the item was resolved through, `channel_id` first
+    /// (see [`Event::NowPlaying`]).
+    #[serde(default)]
+    pub resolution_path: Vec<String>,
 }
 
 /// One entry of `GET /clients`: a client connected to the control channel

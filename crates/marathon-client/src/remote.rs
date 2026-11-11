@@ -439,6 +439,7 @@ mod tests {
             item_id: item.into(),
             title: "T".into(),
             position_ms: 0,
+            resolution_path: vec!["c".into()],
         }
     }
 

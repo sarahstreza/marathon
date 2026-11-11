@@ -1069,6 +1069,22 @@
           }
         }
       },
+      "ChannelRef": {
+        "type": "object",
+        "description": "A channel named in a resolution path (PLAN.md M11).",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "ChannelSummary": {
         "type": "object",
         "description": "A channel as listed by `GET /channels`.",
@@ -1091,13 +1107,17 @@
               }
             ]
           },
+          "hidden": {
+            "type": "boolean",
+            "description": "Whether the channel is hidden: left out of the guide and channel\nup/down, and listed only with `?include_hidden=true`. A hidden\nchannel can still be tuned by ID."
+          },
           "id": {
             "type": "string"
           },
           "item_count": {
             "type": "integer",
             "format": "int32",
-            "description": "Number of playable (not missing) items in the channel.",
+            "description": "Number of playable (not missing) items in the channel, counting\nthose of its child channels (PLAN.md M11).",
             "minimum": 0
           },
           "name": {
@@ -1106,6 +1126,7 @@
           "number": {
             "type": "integer",
             "format": "int32",
+            "description": "The channel number. `0` for a hidden channel configured without\none.",
             "minimum": 0
           },
           "position_ms": {
@@ -1113,6 +1134,13 @@
             "format": "int64",
             "description": "Saved playback position within `current`.",
             "minimum": 0
+          },
+          "resolution_path": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelRef"
+            },
+            "description": "The channels `current` is resolved through: this channel first,\nthen any nested child channels. Just this channel for an ordinary\nchannel; empty if it has nothing to play."
           }
         }
       },
@@ -1187,6 +1215,13 @@
           },
           "item_id": {
             "type": "string"
+          },
+          "resolution_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The channels the item was resolved through, `channel_id` first\n(see [`Event::NowPlaying`])."
           },
           "title": {
             "type": "string",
@@ -1271,6 +1306,13 @@
                 "description": "Where playback started within the item.",
                 "minimum": 0
               },
+              "resolution_path": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The channels the item was resolved through (PLAN.md M11):\n`channel_id` first, then each nested child channel, ending with\nthe one the item belongs to. Just `[channel_id]` for an\nordinary channel; empty from clients older than nested channels."
+              },
               "title": {
                 "type": "string",
                 "description": "Human-readable description, e.g. `Show · S03E14 · The Injury`."
@@ -1303,6 +1345,13 @@
                 "enum": [
                   "channel_changed"
                 ]
+              },
+              "resolution_path": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "As for `now_playing`: the channel tuned to, then any child\nchannels its current item comes through."
               }
             }
           },
@@ -1474,7 +1523,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The channel the client was tuned to."
           },
           "client_id": {
             "type": [
@@ -1503,6 +1553,20 @@
             "format": "int64",
             "description": "Playback position within the item when the event happened.",
             "minimum": 0
+          },
+          "resolution_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The channels the item was resolved through, `channel_id` first\n(see [`Now::resolution_path`]). Empty for events recorded before\nnesting existed."
+          },
+          "resolved_channel_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The channel `item_id` belongs to: `channel_id` itself, or for a\nchannel with nested child channels (PLAN.md M11) the child that\nsupplied the item. `None` for events recorded before nesting\nexisted."
           },
           "ts_ms": {
             "type": "integer",
@@ -1646,9 +1710,23 @@
             "description": "Saved playback position within `item`. This is the raw saved\nposition; clients apply the resume rewind and the finished threshold\n(PLAN.md §1) themselves.",
             "minimum": 0
           },
+          "resolution_path": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelRef"
+            },
+            "description": "The channels `item` was resolved through (PLAN.md M11): this\nchannel first, then each nested child channel, ending with the one\n`item` belongs to. Just this channel for an ordinary channel."
+          },
           "stream_url": {
             "type": "string",
             "description": "Where to stream `item` from."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Problems the server stepped past to find `item`, such as a child\nchannel with nothing to play. Clients report each as an `error`\nevent; playback carries on."
           }
         }
       },

@@ -85,13 +85,20 @@
       "event": "now_playing",
       "item_id": "0190a1b2-0000-7000-8000-000000000001",
       "position_ms": 5000,
+      "resolution_path": [
+        "office"
+      ],
       "title": "The Office · S03E14 · The Injury"
     },
     {
-      "channel_id": "office",
-      "channel_name": "The Office",
-      "channel_number": 1,
-      "event": "channel_changed"
+      "channel_id": "essayists",
+      "channel_name": "Video Essayists",
+      "channel_number": 10,
+      "event": "channel_changed",
+      "resolution_path": [
+        "essayists",
+        "contrapoints"
+      ]
     },
     {
       "channel_id": "office",

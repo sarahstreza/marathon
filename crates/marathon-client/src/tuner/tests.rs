@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use marathon_api::{Direction, EventKind, HistoryEntry, Item, NextItem, Subtitle};
+use marathon_api::{ChannelRef, Direction, EventKind, HistoryEntry, Item, NextItem, Subtitle};
 
 use super::*;
 use crate::ui::GuideRow;
@@ -98,6 +98,11 @@ impl FakeChannel {
                 stream_url: url(&next.id),
                 item: next,
             }),
+            resolution_path: vec![ChannelRef {
+                id: self.id.clone(),
+                name: format!("Channel {}", self.number),
+            }],
+            warnings: Vec::new(),
         }
     }
 
@@ -136,6 +141,8 @@ impl Api for FakeApi {
                 item_count: c.items.len() as u32,
                 current: c.items.get(c.current).cloned(),
                 position_ms: c.position_ms,
+                hidden: false,
+                resolution_path: Vec::new(),
             })
             .collect())
     }
@@ -757,6 +764,8 @@ fn start_resumes_the_channel_this_client_watched_last() {
         ts_ms: 0,
         client_id: Some(client.into()),
         channel_id: Some(channel.into()),
+        resolved_channel_id: None,
+        resolution_path: Vec::new(),
         item_id: None,
         kind: EventKind::Progress,
         position_ms: None,

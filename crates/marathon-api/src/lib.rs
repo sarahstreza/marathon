@@ -93,18 +93,38 @@ pub struct Item {
     pub missing: bool,
 }
 
+/// A channel named in a resolution path (PLAN.md M11).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ChannelRef {
+    pub id: String,
+    pub name: String,
+}
+
 /// A channel as listed by `GET /channels`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ChannelSummary {
     pub id: String,
+    /// The channel number. `0` for a hidden channel configured without
+    /// one.
     pub number: u32,
     pub name: String,
-    /// Number of playable (not missing) items in the channel.
+    /// Number of playable (not missing) items in the channel, counting
+    /// those of its child channels (PLAN.md M11).
     pub item_count: u32,
     /// What the channel is on, or `None` if it has no playable items.
     pub current: Option<Item>,
     /// Saved playback position within `current`.
     pub position_ms: u64,
+    /// Whether the channel is hidden: left out of the guide and channel
+    /// up/down, and listed only with `?include_hidden=true`. A hidden
+    /// channel can still be tuned by ID.
+    #[serde(default)]
+    pub hidden: bool,
+    /// The channels `current` is resolved through: this channel first,
+    /// then any nested child channels. Just this channel for an ordinary
+    /// channel; empty if it has nothing to play.
+    #[serde(default)]
+    pub resolution_path: Vec<ChannelRef>,
 }
 
 /// An item to prefetch: what the channel will play after the current item.
@@ -132,7 +152,33 @@ pub struct Now {
     /// The item the channel will advance to, for prefetching. Computed
     /// without moving the channel. `None` only if it cannot be determined.
     pub next: Option<NextItem>,
+    /// The channels `item` was resolved through (PLAN.md M11): this
+    /// channel first, then each nested child channel, ending with the one
+    /// `item` belongs to. Just this channel for an ordinary channel.
+    #[serde(default)]
+    pub resolution_path: Vec<ChannelRef>,
+    /// Problems the server stepped past to find `item`, such as a child
+    /// channel with nothing to play. Clients report each as an `error`
+    /// event; playback carries on.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
+
+/// One item of `GET /channels/{id}/plan`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PlannedItem {
+    pub item: Item,
+    /// The channels `item` would be resolved through, as in [`Now`].
+    pub resolution_path: Vec<ChannelRef>,
+    /// How far ahead of now the item would start, if the channel plays
+    /// without interruption from its saved position. Items whose
+    /// duration is unknown count as [`PLAN_UNKNOWN_DURATION_MS`].
+    pub starts_in_ms: u64,
+}
+
+/// What `GET /channels/{id}/plan` assumes an item of unknown duration
+/// lasts: 30 minutes.
+pub const PLAN_UNKNOWN_DURATION_MS: u64 = 30 * 60 * 1000;
 
 /// `POST /channels/{id}/progress`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -244,7 +290,19 @@ pub struct HistoryEntry {
     pub ts_ms: i64,
     /// The reporting client's `X-Marathon-Client` header, if it sent one.
     pub client_id: Option<String>,
+    /// The channel the client was tuned to.
     pub channel_id: Option<String>,
+    /// The channel `item_id` belongs to: `channel_id` itself, or for a
+    /// channel with nested child channels (PLAN.md M11) the child that
+    /// supplied the item. `None` for events recorded before nesting
+    /// existed.
+    #[serde(default)]
+    pub resolved_channel_id: Option<String>,
+    /// The channels the item was resolved through, `channel_id` first
+    /// (see [`Now::resolution_path`]). Empty for events recorded before
+    /// nesting existed.
+    #[serde(default)]
+    pub resolution_path: Vec<String>,
     pub item_id: Option<String>,
     pub kind: EventKind,
     /// Playback position within the item when the event happened.

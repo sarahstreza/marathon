@@ -7,7 +7,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use marathon_api::{
-    AdvanceReason, ChannelSummary, EventKind, Item, NextItem, Now, ProgressReport, Subtitle, paths,
+    AdvanceReason, ChannelRef, ChannelSummary, EventKind, Item, NextItem, Now, ProgressReport,
+    Subtitle, paths,
 };
 use marathon_rules::{Cursor, ItemKey, Rule};
 
@@ -57,6 +58,11 @@ impl App {
                     item_count: u32::try_from(loaded.items.len()).unwrap_or(u32::MAX),
                     current: Some(to_api_item(loaded.current())?),
                     position_ms: to_u64(loaded.state.position_ms),
+                    hidden: false,
+                    resolution_path: vec![ChannelRef {
+                        id: channel.id.clone(),
+                        name: channel.name.clone(),
+                    }],
                 },
                 Err(ApiError::ChannelEmpty(_)) => ChannelSummary {
                     id: channel.id.clone(),
@@ -65,6 +71,8 @@ impl App {
                     item_count: 0,
                     current: None,
                     position_ms: 0,
+                    hidden: false,
+                    resolution_path: Vec::new(),
                 },
                 Err(err) => return Err(err),
             };
@@ -335,6 +343,11 @@ fn to_now(loaded: &Loaded) -> Result<Now, ApiError> {
         position_ms: to_u64(loaded.state.position_ms),
         stream_url: paths::stream(&current.id),
         next,
+        resolution_path: vec![ChannelRef {
+            id: loaded.channel.id.clone(),
+            name: loaded.channel.name.clone(),
+        }],
+        warnings: Vec::new(),
     })
 }
 

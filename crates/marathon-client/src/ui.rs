@@ -153,6 +153,8 @@ mod tests {
             item_count: 1,
             current: Some(item(Some(show), Some(3), Some(14))),
             position_ms: 0,
+            hidden: false,
+            resolution_path: Vec::new(),
         };
         let banner = Banner::from_summary(&summary("The Office"));
         assert_eq!(banner.show, None);

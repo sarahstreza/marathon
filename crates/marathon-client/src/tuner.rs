@@ -626,6 +626,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             channel_id: now.channel_id.clone(),
             channel_number: now.channel_number,
             channel_name: now.channel_name.clone(),
+            resolution_path: resolution_ids(&now),
         });
         // A fresh choice by the viewer gets a fresh set of retries.
         self.failures = 0;
@@ -649,6 +650,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 item_id: now.item.id.clone(),
                 title: describe(&now),
                 position_ms: start_ms,
+                resolution_path: resolution_ids(&now),
             };
             self.state = State::Playing(Box::new(Playing {
                 resume_floor: (now.position_ms > start_ms).then_some(now.position_ms),
@@ -797,6 +799,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 item_id: now.item.id.clone(),
                 title: describe(&now),
                 position_ms: 0,
+                resolution_path: resolution_ids(&now),
             });
             self.state = State::Playing(Box::new(Playing {
                 now,
@@ -925,6 +928,17 @@ fn subtitle_tracks(item: &marathon_api::Item) -> Vec<SubtitleTrack> {
 
 /// A one-line description of the current item, e.g.
 /// `Show · S03E14 · The Injury`.
+/// The IDs of the channels `now`'s item was resolved through (PLAN.md
+/// M11), for events. A server older than nested channels sends no path;
+/// the channel itself is the whole path then.
+fn resolution_ids(now: &Now) -> Vec<String> {
+    if now.resolution_path.is_empty() {
+        vec![now.channel_id.clone()]
+    } else {
+        now.resolution_path.iter().map(|c| c.id.clone()).collect()
+    }
+}
+
 pub fn describe(now: &Now) -> String {
     let item = &now.item;
     let mut parts = Vec::new();
