@@ -8,9 +8,10 @@ it run and it keeps going.
 **Status:** early development. Milestones M0 (scaffold), M1 (rules engine),
 and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
 overlay), M3.5 (seams: pluggable input, `Action`/`Event` control plane,
-skipping unplayable items, windowing kept at the edge), and M4 (embedded
-mode: the desktop client runs its own server), and M5 (on-screen overlay,
-mouse, and gamepad) are implemented and awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
+skipping unplayable items, windowing kept at the edge), M4 (embedded
+mode: the desktop client runs its own server), M5 (on-screen overlay,
+mouse, and gamepad), and M6 (remote control and events over the API) are
+implemented and awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -34,6 +35,8 @@ milestone checklists. Read it before changing anything substantial.
 | `config/example.toml` | Annotated example configuration |
 | `scripts/make-test-library.sh` | Generates a fake video library for testing |
 | `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
+| `docs/REMOTE.md` | Remote control and events over the API |
+| `examples/` | Shell scripts that send actions and follow events |
 
 Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 `apps/marathond/tests/dependency_graph.rs`.
@@ -113,6 +116,12 @@ for keyboard, mouse, and game controller. In short: PgUp/PgDn (or the
 arrows, the controller's shoulder buttons, or the mouse wheel) change
 channel; G opens the guide; Space pauses; N/P skip episodes; I shows
 what's on; Q quits.
+
+**Remote control:** the client keeps a connection open to its server,
+so anything else can drive it and follow along over the API, for example
+`curl -X POST localhost:7878/api/v1/clients/default/actions -d
+'{"action":"channel_up"}'`. See [`docs/REMOTE.md`](docs/REMOTE.md) and
+the scripts in [`examples/`](examples).
 
 The client stores only a random client ID, in `marathon/client-id` under
 the user's config directory (`~/.config` on Linux).

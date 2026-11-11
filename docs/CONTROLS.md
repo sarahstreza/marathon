@@ -6,7 +6,8 @@ you'll just flip channels and let it play. This page covers everything
 else you can do, with a keyboard, a mouse, or a game controller.
 
 All three work at the same time, and none of them takes priority:
-whatever you pressed last wins.
+whatever you pressed last wins. The same goes for programs controlling
+Marathon over the network; see [REMOTE.md](REMOTE.md).
 
 ## Quick reference
 
