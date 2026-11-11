@@ -4,8 +4,9 @@
 //!
 //! It owns the event loop and the window, gives the
 //! [`Renderer`](crate::renderer::Renderer) a [`Surface`](crate::surface::Surface),
-//! and turns key events into [`Key`](marathon_client::keyboard::Key)s for
-//! the keyboard input source. The rest of the app talks to it only
+//! turns key and mouse events into the input sources' own types, hides the
+//! cursor when the mouse is idle, and (with the `input-gamepad` feature)
+//! runs the gamepad input source. The rest of the app talks to it only
 //! through [`PlatformHandle`] and [`Hooks`].
 //!
 //! The loop:
@@ -13,20 +14,33 @@
 //! - mpv's frame callback posts [`UserEvent::Frame`] through the event
 //!   loop proxy; the handler asks the renderer whether a frame is due
 //!   and, if so, requests a redraw. mpv is never called from the callback.
-//! - A redraw draws and presents (vsynced).
-//! - `ControlFlow::Wait` throughout, so the app does not spin.
+//! - Overlay messages post [`UserEvent::Overlay`]; the handler applies
+//!   them and redraws if they changed what is on screen.
+//! - A redraw draws video and overlay and presents (vsynced).
+//! - Between events the loop sleeps (`ControlFlow::Wait`, or `WaitUntil`
+//!   the next overlay fade or cursor hide). Only while an overlay fade is
+//!   running does it redraw continuously, at the display's refresh rate.
 
+mod cursor;
+#[cfg(feature = "input-gamepad")]
+pub mod gamepad;
 mod gl;
 mod keys;
 
+use std::time::Instant;
+
 use marathon_client::keyboard::KeyFeed;
+use marathon_client::mouse::{MouseFeed, MouseInput};
 use marathon_mpv::Mpv;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::WindowId;
 
+use self::cursor::CursorIdle;
 use self::gl::GlWindowSurface;
+use crate::overlay::Overlay;
+use crate::overlay::fade::Wake;
 use crate::renderer::Renderer;
 
 /// Events posted to the event loop from other threads.
@@ -34,6 +48,8 @@ use crate::renderer::Renderer;
 enum UserEvent {
     /// mpv may have a new frame.
     Frame,
+    /// The overlay has messages waiting.
+    Overlay,
     ToggleFullscreen,
     Quit,
 }
@@ -68,6 +84,17 @@ impl PlatformHandle {
     pub fn quit(&self) {
         let _ = self.0.send_event(UserEvent::Quit);
     }
+
+    /// Tells the window the overlay has messages to apply.
+    pub fn overlay_changed(&self) {
+        let _ = self.0.send_event(UserEvent::Overlay);
+    }
+}
+
+/// Where the platform sends local input.
+pub struct InputFeeds {
+    pub keys: KeyFeed,
+    pub mouse: MouseFeed,
 }
 
 /// The event loop, before it runs.
@@ -86,20 +113,23 @@ impl Platform {
         PlatformHandle(self.event_loop.create_proxy())
     }
 
-    /// Opens the window, renders `mpv` into it, feeds key presses to
-    /// `keys`, and runs until the app shuts down. Must run on the main
+    /// Opens the window, renders `mpv` and `overlay` into it, feeds input
+    /// to `input`, and runs until the app shuts down. Must run on the main
     /// thread.
     pub fn run(
         self,
         options: Options,
         mpv: Mpv,
-        keys: KeyFeed,
+        overlay: Overlay,
+        input: InputFeeds,
         hooks: impl Hooks + 'static,
     ) -> anyhow::Result<()> {
         let mut app = App {
             options,
             mpv,
-            keys,
+            overlay,
+            input,
+            cursor: CursorIdle::new(Instant::now()),
             hooks: Box::new(hooks),
             proxy: self.event_loop.create_proxy(),
             graphics: None,
@@ -124,7 +154,9 @@ struct Graphics {
 struct App {
     options: Options,
     mpv: Mpv,
-    keys: KeyFeed,
+    overlay: Overlay,
+    input: InputFeeds,
+    cursor: CursorIdle,
     hooks: Box<dyn Hooks>,
     proxy: EventLoopProxy<UserEvent>,
     graphics: Option<Graphics>,
@@ -145,6 +177,15 @@ impl App {
             })
         }?;
         Ok(Graphics { renderer, surface })
+    }
+
+    /// The mouse was moved or used: show the cursor.
+    fn mouse_active(&mut self) {
+        if self.cursor.moved(Instant::now())
+            && let Some(g) = &self.graphics
+        {
+            g.surface.window().set_cursor_visible(true);
+        }
     }
 
     fn shut_down(&mut self, event_loop: &ActiveEventLoop) {
@@ -185,6 +226,13 @@ impl ApplicationHandler<UserEvent> for App {
                     g.surface.window().request_redraw();
                 }
             }
+            UserEvent::Overlay => {
+                if self.overlay.pump(Instant::now())
+                    && let Some(g) = &self.graphics
+                {
+                    g.surface.window().request_redraw();
+                }
+            }
             UserEvent::ToggleFullscreen => {
                 if let Some(g) = &self.graphics {
                     g.surface.toggle_fullscreen();
@@ -204,16 +252,65 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(g) = &self.graphics {
-                    g.renderer.draw(&g.surface);
+                if let Some(g) = &mut self.graphics {
+                    g.renderer.draw(&g.surface, &self.overlay, Instant::now());
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(key) = keys::translate(&event.logical_key) {
-                    self.keys.press(key, event.repeat);
+                    self.input.keys.press(key, event.repeat);
+                }
+            }
+            WindowEvent::CursorMoved { .. } => self.mouse_active(),
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.mouse_active();
+                self.input.mouse.input(match delta {
+                    MouseScrollDelta::LineDelta(_, y) => MouseInput::WheelLines(y.into()),
+                    MouseScrollDelta::PixelDelta(p) => MouseInput::WheelPixels(p.y),
+                });
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button,
+                ..
+            } => {
+                self.mouse_active();
+                if button == MouseButton::Left {
+                    self.input.mouse.input(MouseInput::Click);
                 }
             }
             _ => {}
         }
+    }
+
+    /// Runs after each batch of events: keeps an overlay fade animating,
+    /// hides an idle cursor, and decides how long to sleep.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(g) = &self.graphics else {
+            return;
+        };
+        let now = Instant::now();
+        if self.cursor.tick(now) {
+            g.surface.window().set_cursor_visible(false);
+        }
+        let wake = self.overlay.wake(now);
+        // Redraw while a fade runs, and once more after the overlay has
+        // gone, to clear its last faint frame.
+        if wake == Wake::Animating || (g.renderer.overlay_on_screen() && !self.overlay.visible(now))
+        {
+            g.surface.window().request_redraw();
+        }
+        let next = match wake {
+            Wake::At(t) => Some(t),
+            Wake::Animating | Wake::Idle => None,
+        };
+        let deadline = match (next, self.cursor.deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.set_control_flow(match deadline {
+            Some(t) => ControlFlow::WaitUntil(t),
+            None => ControlFlow::Wait,
+        });
     }
 }

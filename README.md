@@ -9,8 +9,8 @@ it run and it keeps going.
 and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
 overlay), M3.5 (seams: pluggable input, `Action`/`Event` control plane,
 skipping unplayable items, windowing kept at the edge), and M4 (embedded
-mode: the desktop client runs its own server) are implemented and awaiting
-their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
+mode: the desktop client runs its own server), and M5 (on-screen overlay,
+mouse, and gamepad) are implemented and awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -33,19 +33,22 @@ milestone checklists. Read it before changing anything substantial.
 | `apps/marathon-desktop` | Desktop client binary |
 | `config/example.toml` | Annotated example configuration |
 | `scripts/make-test-library.sh` | Generates a fake video library for testing |
+| `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
 
 Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 `apps/marathond/tests/dependency_graph.rs`.
 
 ## Development
 
-Requires Rust stable (edition 2024, 1.94 or newer) and libmpv with its
-headers and `pkg-config` file (client API 2.0+, i.e. mpv 0.35 or newer):
+Requires Rust stable (edition 2024, 1.95 or newer) and libmpv with its
+headers and `pkg-config` file (client API 2.0+, i.e. mpv 0.35 or newer).
+On Linux, gamepad support also needs libudev's headers (or build the
+desktop app with `--no-default-features` to leave gamepads out):
 
-| Platform | Package |
+| Platform | Packages |
 |---|---|
-| Fedora (incl. a toolbox/distrobox on Silverblue, Bazzite, ...) | `sudo dnf install mpv-devel` |
-| Debian / Ubuntu | `sudo apt install libmpv-dev` |
+| Fedora (incl. a toolbox/distrobox on Silverblue, Bazzite, ...) | `sudo dnf install mpv-devel systemd-devel` |
+| Debian / Ubuntu | `sudo apt install libmpv-dev libudev-dev` |
 | macOS | `brew install mpv pkgconf` |
 
 Every change must pass:
@@ -57,8 +60,8 @@ cargo test --workspace
 ```
 
 CI runs these on Linux and macOS (`.github/workflows/ci.yml`), plus
-`scripts/check-seams.sh`, which checks that `winit`/`glutin` stay inside
-`apps/marathon-desktop/src/platform/` and out of `marathon-client`.
+`scripts/check-seams.sh`, which checks that `winit`/`glutin`/`gilrs` stay
+inside `apps/marathon-desktop/src/platform/` and out of `marathon-client`.
 
 ### Running the server
 
@@ -103,27 +106,13 @@ sets a `token`, the app sends it. Embedded mode and a standalone
 `http://127.0.0.1:7878`, `--token` (or `MARATHON_TOKEN`) supplies a bearer
 token, and `--channel N` picks the starting channel; by default it resumes
 the channel this client watched last. Without `--windowed` it starts
-fullscreen. There is no on-screen UI yet: channel changes, `I`, and the
-guide go to the log. Set `RUST_LOG=info,mpv=debug` to see mpv's own log.
+fullscreen. Set `RUST_LOG=info,mpv=debug` to see mpv's own log.
 
-| Key | Does |
-|---|---|
-| PgUp / PgDn | Channel up / down |
-| Up / Down | Channel up / down; in the guide, move the highlight |
-| Left / Right | Seek −10s / +10s (nothing in the guide) |
-| Enter | In the guide, tune to the highlighted channel; otherwise show info |
-| digits, then Enter or a pause | Go to channel number |
-| Space | Pause / resume |
-| N / P | Next / previous item |
-| S | Cycle subtitles (on/off with one track) |
-| F | Toggle fullscreen |
-| I | Log what is playing |
-| G / Esc | Open (logs the channel list) / close the guide |
-| Q | Quit (saves the position) |
-
-Items that cannot be played (e.g. a file renamed after the last scan) are
-skipped with a warning; after five failures in a row the client stops
-trying until you change channel or press N.
+**Controls:** see [`docs/CONTROLS.md`](docs/CONTROLS.md), the user guide
+for keyboard, mouse, and game controller. In short: PgUp/PgDn (or the
+arrows, the controller's shoulder buttons, or the mouse wheel) change
+channel; G opens the guide; Space pauses; N/P skip episodes; I shows
+what's on; Q quits.
 
 The client stores only a random client ID, in `marathon/client-id` under
 the user's config directory (`~/.config` on Linux).

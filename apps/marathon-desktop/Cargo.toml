@@ -12,13 +12,16 @@ workspace = true
 
 [dependencies]
 marathon-api.workspace = true
-marathon-client = { workspace = true, features = ["input-keyboard"] }
+marathon-client = { workspace = true, features = ["input-keyboard", "input-mouse"] }
 marathon-mpv.workspace = true
 # For --embedded: runs the server in-process (PLAN.md §9).
 marathon-server.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 dirs.workspace = true
+egui.workspace = true
+egui_glow.workspace = true
+gilrs = { workspace = true, optional = true }
 glow.workspace = true
 glutin.workspace = true
 glutin-winit.workspace = true
@@ -29,3 +32,8 @@ winit.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[features]
+default = ["input-gamepad"]
+# Gamepad input through gilrs (needs libudev on Linux).
+input-gamepad = ["dep:gilrs", "marathon-client/input-gamepad"]

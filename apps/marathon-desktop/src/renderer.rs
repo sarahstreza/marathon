@@ -1,18 +1,33 @@
-//! Draws mpv's video (and, from M5, the overlay) into any [`Surface`].
-//! Knows nothing about windows or input.
+//! Draws mpv's video and the overlay into any [`Surface`]. Knows nothing
+//! about windows or input.
+//!
+//! Each frame (PLAN.md §9 "Render loop"): mpv renders the video into the
+//! default framebuffer, egui paints the overlay on top if any of it is
+//! visible, the surface presents, and mpv is told about the swap. With
+//! the overlay hidden, egui does no work at all, so plain playback costs
+//! what mpv alone does.
 
-use anyhow::Context as _;
+use std::sync::Arc;
+use std::time::Instant;
+
+use anyhow::{Context as _, anyhow};
 use glow::HasContext;
 use marathon_mpv::Mpv;
 use marathon_mpv::render::{GlParams, RenderContext};
 
+use crate::overlay::{self, Overlay};
 use crate::surface::{NativeDisplay, Surface};
 
 /// Renders frames. Field order matters: mpv's render context is dropped
-/// before the GL function table.
+/// before the GL function table (and [`Drop`] frees the overlay's GL
+/// objects before either).
 pub struct Renderer {
     mpv: RenderContext,
-    gl: glow::Context,
+    egui: egui::Context,
+    painter: egui_glow::Painter,
+    /// Whether the last frame drawn included the overlay.
+    overlay_on_screen: bool,
+    gl: Arc<glow::Context>,
 }
 
 impl Renderer {
@@ -32,7 +47,7 @@ impl Renderer {
     ) -> anyhow::Result<Self> {
         let loader = surface.gl_loader();
         // SAFETY: the context is current (this function's contract).
-        let gl = unsafe { glow::Context::from_loader_function_cstr(|name| loader(name)) };
+        let gl = Arc::new(unsafe { glow::Context::from_loader_function_cstr(|name| loader(name)) });
         let (x11_display, wayland_display) = match surface.native_display() {
             NativeDisplay::X11(d) => (Some(d), None),
             NativeDisplay::Wayland(d) => (None, Some(d)),
@@ -48,6 +63,8 @@ impl Renderer {
         let mut render = unsafe { RenderContext::new_gl(mpv, params) }
             .context("cannot create mpv's render context")?;
         render.set_update_callback(on_frame);
+        let painter = egui_glow::Painter::new(gl.clone(), "", None, true)
+            .map_err(|e| anyhow!("cannot set up the overlay painter: {e}"))?;
         tracing::info!(
             gl = ?gl.version(),
             // SAFETY: a plain GL query on the current context.
@@ -56,7 +73,13 @@ impl Renderer {
             scale = surface.scale_factor(),
             "renderer ready"
         );
-        Ok(Self { mpv: render, gl })
+        Ok(Self {
+            mpv: render,
+            egui: egui::Context::default(),
+            painter,
+            overlay_on_screen: false,
+            gl,
+        })
     }
 
     /// Call after `on_frame` fired: whether a new frame should be drawn.
@@ -64,12 +87,20 @@ impl Renderer {
         self.mpv.update()
     }
 
-    /// Draws the current frame into `surface` and presents it.
-    pub fn draw(&self, surface: &dyn Surface) {
-        let (w, h) = surface.drawable_size();
+    /// Whether the last frame drawn showed (some of) the overlay. If the
+    /// overlay has since become invisible, one more frame is needed to
+    /// clear it.
+    pub fn overlay_on_screen(&self) -> bool {
+        self.overlay_on_screen
+    }
+
+    /// Draws the current video frame and, if visible, the overlay as of
+    /// `now` into `surface`, and presents it.
+    pub fn draw(&mut self, surface: &dyn Surface, overlay: &Overlay, now: Instant) {
+        let (width, height) = surface.drawable_size();
         let (w, h) = (
-            i32::try_from(w).unwrap_or(i32::MAX),
-            i32::try_from(h).unwrap_or(i32::MAX),
+            i32::try_from(width).unwrap_or(i32::MAX),
+            i32::try_from(height).unwrap_or(i32::MAX),
         );
         // SAFETY: plain GL calls on the current context.
         unsafe {
@@ -80,9 +111,41 @@ impl Renderer {
         if let Err(err) = self.mpv.render(0, w, h, true) {
             tracing::warn!(%err, "mpv render failed");
         }
+        self.overlay_on_screen = overlay.visible(now);
+        if self.overlay_on_screen {
+            self.paint_overlay(width, height, overlay, now);
+        }
         if let Err(err) = surface.present() {
             tracing::warn!(%err, "present failed");
         }
         self.mpv.report_swap();
+    }
+
+    fn paint_overlay(&mut self, width: u32, height: u32, overlay: &Overlay, now: Instant) {
+        let input = overlay::raw_input(width, height, self.painter.max_texture_side());
+        let output = self.egui.run_pass(input, |ctx| overlay.draw(ctx, now));
+        let primitives = self.egui.tessellate(output.shapes, output.pixels_per_point);
+        let mut textures = output.textures_delta;
+        self.painter.paint_and_update_textures(
+            [width, height],
+            output.pixels_per_point,
+            &primitives,
+            &mut textures,
+        );
+        // egui leaves scissoring and blending on; give mpv back the default
+        // state it expects for the next frame.
+        // SAFETY: plain GL calls on the current context.
+        unsafe {
+            self.gl.disable(glow::SCISSOR_TEST);
+            self.gl.disable(glow::BLEND);
+        }
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        // Frees the overlay's GL objects while the context is still current
+        // (this type's contract).
+        self.painter.destroy();
     }
 }

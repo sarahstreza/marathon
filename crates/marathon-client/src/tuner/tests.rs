@@ -5,11 +5,13 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use marathon_api::{Direction, EventKind, HistoryEntry, Item, NextItem, Subtitle};
 
 use super::*;
+use crate::ui::GuideRow;
 
 const MIN: u64 = 60_000;
 
@@ -108,10 +110,13 @@ impl FakeChannel {
 struct FakeApi {
     server: Rc<RefCell<FakeServer>>,
     journal: Journal,
+    /// API calls so far; shared with the UI sink, which must be `Send`.
+    calls: Arc<AtomicUsize>,
 }
 
 impl FakeApi {
     fn log(&self, entry: Entry) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         self.journal.borrow_mut().push(entry);
     }
 }
@@ -276,6 +281,8 @@ struct Harness {
     clock: Rc<Cell<Instant>>,
     broken: Rc<RefCell<HashSet<String>>>,
     events: Arc<Mutex<Vec<Event>>>,
+    /// UI cues, each with the number of API calls made before it.
+    ui: Arc<Mutex<Vec<(usize, UiEvent)>>>,
 }
 
 impl Harness {
@@ -309,17 +316,25 @@ impl Harness {
             duration_ms: Rc::new(Cell::new(Some(20 * MIN))),
             paused: false,
         };
+        let calls = Arc::new(AtomicUsize::new(0));
         let api = FakeApi {
             server: server.clone(),
             journal: journal.clone(),
+            calls: calls.clone(),
         };
         let config = TunerConfig {
             client_id: Some("me".into()),
             ..TunerConfig::default()
         };
         let sink = events.clone();
+        let ui = Arc::new(Mutex::new(Vec::new()));
+        let ui_sink = ui.clone();
         let tuner = Tuner::new(api, player, TestClock(clock.clone()), config)
-            .with_event_sink(move |e| sink.lock().unwrap().push(e));
+            .with_event_sink(move |e| sink.lock().unwrap().push(e))
+            .with_ui_sink(move |cue| {
+                let calls = calls.load(Ordering::SeqCst);
+                ui_sink.lock().unwrap().push((calls, cue));
+            });
         Self {
             tuner,
             server,
@@ -328,7 +343,16 @@ impl Harness {
             clock,
             broken,
             events,
+            ui,
         }
+    }
+
+    /// Takes the UI cues so far.
+    fn take_ui(&self) -> Vec<UiEvent> {
+        std::mem::take(&mut *self.ui.lock().unwrap())
+            .into_iter()
+            .map(|(_, cue)| cue)
+            .collect()
     }
 
     fn set_saved(&self, channel: &str, current: usize, position_ms: u64) {
@@ -1056,4 +1080,136 @@ fn tuning_and_advancing_emit_events() {
             Event::NowPlaying { item_id: next, .. },
         ] if ended == "c1-0" && next == "c1-1"
     ));
+}
+
+fn banner(number: u32, title: &str) -> Banner {
+    Banner {
+        channel_number: number,
+        channel_name: format!("Channel {number}"),
+        title: Some(title.into()),
+        show: None,
+    }
+}
+
+#[test]
+fn the_banner_is_cued_before_the_switch_touches_the_network() {
+    let mut h = Harness::new(3, 2);
+    h.set_saved("c2", 1, MIN);
+    h.tuner.start(Some(1)).unwrap();
+    h.take_ui();
+    h.take();
+    let calls = h.tuner.api.calls.clone();
+    let calls_before = calls.load(Ordering::SeqCst);
+
+    h.action(Action::ChannelUp);
+    let cues = std::mem::take(&mut *h.ui.lock().unwrap());
+    // The first cue names the target channel and what it was last on, and
+    // came before any API call for the switch (progress, now).
+    assert_eq!(cues[0], (calls_before, UiEvent::Tuning(banner(2, "c2-1"))));
+    assert!(calls.load(Ordering::SeqCst) > calls_before);
+    assert_eq!(
+        cues[1].1,
+        UiEvent::Playing {
+            banner: banner(2, "c2-1"),
+            announce: true
+        }
+    );
+    assert_eq!(cues.len(), 2, "{cues:?}");
+}
+
+#[test]
+fn a_failed_switch_cues_the_channel_still_playing() {
+    let mut h = Harness::new(2, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.server.borrow_mut().channels[1].items.clear();
+    h.take_ui();
+    assert!(h.tuner.handle_action(Action::ChannelUp).is_err());
+    assert_eq!(
+        h.take_ui(),
+        vec![
+            UiEvent::Tuning(banner(2, "c2-0")),
+            UiEvent::Playing {
+                banner: banner(1, "c1-0"),
+                announce: true
+            },
+        ]
+    );
+}
+
+#[test]
+fn automatic_advances_update_the_banner_without_announcing() {
+    let mut h = Harness::new(1, 3);
+    h.tuner.start(Some(1)).unwrap();
+    h.take_ui();
+    h.tuner.handle_player_event(PlayerEvent::Ended).unwrap();
+    assert_eq!(
+        h.take_ui(),
+        vec![UiEvent::Playing {
+            banner: banner(1, "c1-1"),
+            announce: false
+        }]
+    );
+    // A skip is the viewer's doing, so it is announced.
+    h.action(Action::NextItem);
+    assert_eq!(
+        h.take_ui(),
+        vec![UiEvent::Playing {
+            banner: banner(1, "c1-2"),
+            announce: true
+        }]
+    );
+}
+
+#[test]
+fn info_back_and_the_guide_are_cued() {
+    let mut h = Harness::new(3, 2);
+    h.tuner.start(Some(2)).unwrap();
+    h.take_ui();
+
+    h.action(Action::ShowInfo);
+    h.action(Action::Back);
+    assert_eq!(h.take_ui(), vec![UiEvent::ShowInfo, UiEvent::Hide]);
+    h.action(Action::Select);
+    assert_eq!(h.take_ui(), vec![UiEvent::ShowInfo]);
+
+    let row = |n: u32, current| GuideRow {
+        number: n,
+        name: format!("Channel {n}"),
+        on: Some(format!("c{n}-0")),
+        current,
+    };
+    let rows = vec![row(1, false), row(2, true), row(3, false)];
+    let guide = |highlighted| {
+        UiEvent::Guide(Some(Guide {
+            rows: rows.clone(),
+            highlighted,
+        }))
+    };
+    h.action(Action::ToggleGuide);
+    h.action(Action::Navigate {
+        direction: Direction::Down,
+    });
+    h.action(Action::Back);
+    assert_eq!(h.take_ui(), vec![guide(1), guide(2), UiEvent::Guide(None)]);
+
+    // Selecting closes the guide before the switch is announced.
+    h.action(Action::ToggleGuide);
+    h.action(Action::Navigate {
+        direction: Direction::Up,
+    });
+    h.take_ui();
+    h.action(Action::Select);
+    let cues = h.take_ui();
+    assert_eq!(cues[0], UiEvent::Guide(None));
+    assert_eq!(cues[1], UiEvent::Tuning(banner(1, "c1-0")));
+}
+
+#[test]
+fn giving_up_after_failures_cues_stopped() {
+    let mut h = Harness::new(1, 2);
+    h.broken
+        .borrow_mut()
+        .extend(["c1-0".to_owned(), "c1-1".to_owned()]);
+    h.tuner.start(Some(1)).unwrap();
+    assert_eq!(h.take_ui().last(), Some(&UiEvent::Stopped));
 }

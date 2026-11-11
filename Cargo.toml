@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -23,8 +23,17 @@ anyhow = "1.0.104"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 dirs = "7.0.0"
-# Windowing and GL. egui (the M5 overlay) pins these: egui-winit/egui_glow
-# 0.37 need winit ^0.30.13 and glow ^0.17, and glutin-winit 0.5 pairs
+# The overlay (M5). egui_glow without its `winit` feature is only a GL
+# painter, so the overlay needs no windowing library (PLAN.md §2
+# decision 7). egui 0.37 needs Rust 1.95, and bundles its fonts only with
+# `default_fonts` (no longer a default feature); without it no text draws.
+egui = { version = "0.37.0", features = ["default_fonts"] }
+egui_glow = { version = "0.37.0", default-features = false }
+# Gamepads (M5); used only in marathon-desktop's platform module. Needs
+# libudev on Linux.
+gilrs = "0.11.2"
+# Windowing and GL. egui pins these: egui_glow 0.37 needs glow ^0.17 (and
+# egui-winit 0.37, unused, winit ^0.30.13), and glutin-winit 0.5 pairs
 # glutin 0.32 with winit 0.30. Upgrade them together, egui first.
 glow = "0.17.0"
 glutin = "0.32.3"
