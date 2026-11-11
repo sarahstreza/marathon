@@ -1,9 +1,13 @@
 //! Pure programming-rules engine for Marathon channels.
 //!
 //! A rule decides which item a channel plays next. The entry points are
-//! [`next`] and [`previous`], which take a [`Rule`], the channel's items as
-//! [`ItemKey`]s, and a [`Cursor`], and return a [`Step`]: the item to play
-//! and the cursor to store.
+//! [`next`] (or [`next_weighted`]) and [`previous`], which take a [`Rule`],
+//! the channel's items as [`ItemKey`]s, and a [`Cursor`], and return a
+//! [`Step`]: the item to play and the cursor to store.
+//!
+//! An "item" here is anything the caller wants a rule to choose between.
+//! The server also uses it for entries that stand for whole child channels
+//! (PLAN.md M11); this crate neither knows nor cares.
 //!
 //! This crate must stay pure: no I/O, no clocks, no global RNG, and no
 //! dependencies on other Marathon crates. Randomness comes from a seed stored
@@ -17,8 +21,9 @@ mod grouped;
 mod item;
 mod natural;
 mod rng;
+mod weighted;
 
-pub use engine::{Cursor, Step, next, previous};
+pub use engine::{Cursor, Step, next, next_weighted, previous};
 pub use item::ItemKey;
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +48,29 @@ pub enum Rule {
         /// Order in which items play within a group.
         within: Order,
     },
+    /// Pick items at random in proportion to their weights, never the same
+    /// item twice in a row (when there are two or more). Weights are given
+    /// by the caller (see [`next_weighted`]); `by` records how.
+    Weighted {
+        /// How the caller works out each item's weight.
+        #[serde(default)]
+        by: WeightBy,
+    },
+}
+
+/// How the weights of a [`Rule::Weighted`] rule are worked out. The rules
+/// engine does not compute weights itself; this tells the caller what to
+/// pass to [`next_weighted`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeightBy {
+    /// Weights written in config, defaulting to 1.
+    #[default]
+    Manual,
+    /// The number of items an entry stands for (1 for a plain item).
+    ItemCount,
+    /// The total duration of what an entry stands for.
+    Duration,
 }
 
 /// How a [`Rule::Grouped`] rule partitions items.
@@ -104,6 +132,23 @@ mod tests {
                 within: Order::Ordered,
             }
         );
+    }
+
+    #[test]
+    fn parses_weighted_rule() {
+        assert_eq!(
+            parse(r#"rule = { kind = "weighted", by = "item_count" }"#).unwrap(),
+            Rule::Weighted {
+                by: WeightBy::ItemCount
+            }
+        );
+        assert_eq!(
+            parse(r#"rule = { kind = "weighted" }"#).unwrap(),
+            Rule::Weighted {
+                by: WeightBy::Manual
+            }
+        );
+        assert!(parse(r#"rule = { kind = "weighted", by = "mood" }"#).is_err());
     }
 
     #[test]

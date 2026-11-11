@@ -26,6 +26,19 @@ pub fn clip(id: &str, path: &str) -> ItemKey {
     }
 }
 
+/// An entry standing for the child channel `id`, shaped the way
+/// `marathon-server` builds them for nested channels (PLAN.md M11). To the
+/// rules engine it is just another item.
+pub fn channel_entry(id: &str) -> ItemKey {
+    ItemKey {
+        id: format!("channel:{id}"),
+        path: format!("channels/{id}"),
+        show: None,
+        season: None,
+        episode: None,
+    }
+}
+
 /// `seasons` seasons of `per_season` episodes each.
 pub fn show(seasons: u32, per_season: u32) -> Vec<ItemKey> {
     (1..=seasons)
