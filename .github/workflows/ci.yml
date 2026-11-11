@@ -128,3 +128,45 @@ jobs:
           if [ -n "$status" ]; then
             echo "Generated files are not ignored:"; echo "$status"; exit 1
           fi
+
+  # The server's container image (Dockerfile, README "Running the server in
+  # a container"): it builds, starts with the example config, and answers
+  # requests.
+  docker:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: marathond:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image size
+        run: docker image ls marathond:ci
+      - name: Refuses to listen on every interface without a token
+        run: |
+          set -uo pipefail
+          sed '/^token/d' docker/config.toml > /tmp/notoken.toml
+          if out=$(docker run --rm -v /tmp/notoken.toml:/config/config.toml:ro marathond:ci 2>&1); then
+            echo "started without a token:"; echo "$out"; exit 1
+          fi
+          echo "$out" | grep -q 'server.token must be set'
+      - name: Serves the API with the example config
+        run: |
+          set -euo pipefail
+          docker run -d --name marathond -p 7878:7878 \
+            -v "$PWD/docker/config.toml:/config/config.toml:ro" marathond:ci
+          for _ in $(seq 30); do
+            curl -s -o /dev/null http://127.0.0.1:7878/ && break
+            sleep 1
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7878/api/v1/channels)
+          [ "$code" = 401 ] || { echo "without a token: HTTP $code, want 401"; exit 1; }
+          curl -sf -H 'Authorization: Bearer change-me' http://127.0.0.1:7878/api/v1/channels
+      - name: Server log
+        if: always()
+        run: docker logs marathond || true

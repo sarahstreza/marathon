@@ -1,0 +1,23 @@
+# Runs marathond with Docker Compose (or podman-compose):
+#
+#   cp docker/config.toml docker/marathon.toml   # then edit it
+#   docker compose -f docker/compose.yaml up -d
+#
+# Paths are relative to this file.
+services:
+  marathond:
+    build: ..
+    image: marathond
+    restart: unless-stopped
+    ports:
+      - "7878:7878"
+    environment:
+      RUST_LOG: info
+    volumes:
+      - ./marathon.toml:/config/config.toml:ro
+      - marathon-data:/data
+      # Your video library; source roots in the config refer to /media.
+      - /path/to/videos:/media:ro
+
+volumes:
+  marathon-data:
