@@ -221,6 +221,49 @@ If your controller does nothing:
 Builds made without gamepad support (`--no-default-features`) ignore
 controllers entirely.
 
+## On Android (phones and Android TV)
+
+The Android app watches a Marathon server on your network: the first
+time it starts, give it the server's address (for example
+`http://192.168.1.10:7878`) and its token, if it has one. Everything
+else works as on the desktop. Channels pick up where any device left
+them, so you can start an episode on the computer and finish it on the
+phone.
+
+**With a TV remote** (Android TV, Google TV) or a keyboard:
+
+| To… | Remote |
+|---|---|
+| Change channel | Channel + / −, or ▲ / ▼ |
+| Go to a channel by number | Type the number (then OK, or wait); it shows top left as you type |
+| See what's on | Info, Menu, or OK |
+| Open or close the guide | Guide |
+| Skip back or forward 10 seconds | ◀ / ▶ (hold to keep going), or ⏪ / ⏩ |
+| Pause or resume | ⏯, ▶ (play), ⏸ (pause); ⏹ (stop) pauses too |
+| Next / previous episode | ⏭ / ⏮ |
+| Subtitles on / off | Captions (CC) |
+| Close the guide or hide the banner | Back |
+
+A keyboard's letters (N, P, I, G, S) and a game controller's buttons
+work as in the tables above.
+
+**On a phone's touch screen:**
+
+| To… | Touch |
+|---|---|
+| Change channel | Swipe up / down |
+| Skip back or forward 10 seconds | Double-tap the left / right third of the screen |
+| Pause or resume | Double-tap the middle |
+| See what's on, and show the buttons | Tap once |
+| Guide, previous / next episode, pause, subtitles, change server | The buttons along the top |
+| Close the guide or hide the banner | Back |
+
+**Back** closes whatever is open; with nothing open, it leaves the app.
+Leaving the app (Back, Home, switching apps, or the screen turning off)
+pauses the channel and saves its place. Coming back resumes it, unless
+you had paused it yourself. If another app starts playing sound,
+Marathon pauses.
+
 ## Coming later
 
 - **HDMI-CEC:** using your TV's own remote (milestone M7).

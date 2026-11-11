@@ -1,0 +1,1855 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Marathon API",
+    "description": "Channels of personal video that resume where you left off. See PLAN.md §8. Every route requires `Authorization: Bearer <token>` when the server has a token configured. Clients identify themselves with an `X-Marathon-Client` header.",
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/channels": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "operationId": "list_channels",
+        "responses": {
+          "200": {
+            "description": "Every channel, by number, with what it is on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChannelSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/advance": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "description": "Moves the channel to its next item. Idempotent: if `from_item_id` is not the current item, returns the current state without advancing.",
+        "operationId": "advance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdvanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the channel is now playing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Now"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The channel has no playable items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/now": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "description": "Tunes in: returns the current item, saved position, stream URLs, and the next item for prefetching. Records a `tuned` event.",
+        "operationId": "now",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the channel is playing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Now"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The channel has no playable items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/previous": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "description": "Steps the channel back via its rule. Like `advance`, only moves if `from_item_id` is the current item; stays put if there is nothing to go back to.",
+        "operationId": "previous",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviousRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the channel is now playing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Now"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The channel has no playable items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/progress": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "description": "Saves the playback position of the channel's current item.",
+        "operationId": "progress",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`item_id` is not the current item (`stale_item`), or the channel is empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "tags": [
+          "control"
+        ],
+        "description": "Clients connected to their control channel, most recently active first, with what each is playing.",
+        "operationId": "list_clients",
+        "responses": {
+          "200": {
+            "description": "Connected clients",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClientInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clients/connect": {
+      "get": {
+        "tags": [
+          "control"
+        ],
+        "description": "A client's control channel, as a WebSocket. The client must send `X-Marathon-Client`. The server sends each relayed `Action` as a JSON text message; the client sends each of its `Event`s the same way, and the server republishes them on `GET /events`. A client that connects again replaces its earlier connection.",
+        "operationId": "connect",
+        "parameters": [
+          {
+            "name": "X-Marathon-Client",
+            "in": "header",
+            "description": "The client's ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching to the WebSocket protocol"
+          },
+          "400": {
+            "description": "Not a WebSocket request, or no usable client ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clients/{id}/actions": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "description": "Relays an action to a connected client, as if pressed on its remote. `id` may be `default`: the most recently active client. The body is parsed as JSON whatever its `Content-Type`, so a bare `curl -d` works. Delivery is best effort: the action is lost if the client disconnects before it is sent.",
+        "operationId": "client_action",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Client ID, or `default`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Action"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Handed to the client's control channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such client is connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "control"
+        ],
+        "description": "Server-Sent Events: every event any connected client publishes, from now on. Each message's `event:` field is the event's name (`now_playing`, ...) and its `data:` a `RelayedEvent` as JSON. A subscriber that falls far behind gets a comment saying how many events it missed.",
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "description": "The event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelayedEvent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "The server is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/history": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "history",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many events to return (default 50, at most 1000)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent events, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HistoryEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/items/{id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Item"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/rescan": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "description": "Rescans every source and rebuilds channel membership. Returns when done.",
+        "operationId": "rescan",
+        "responses": {
+          "200": {
+            "description": "What the scan found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "operationId": "openapi",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI document",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stream/{item_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "description": "The item's media bytes. Supports `Range` requests and `HEAD`. Items from a Jellyfin source are proxied from Jellyfin, ranges included.",
+        "operationId": "stream",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "206": {
+            "description": "The requested range",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "No such item, or its file is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range cannot be satisfied"
+          },
+          "502": {
+            "description": "The item's Jellyfin server failed or is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subtitles/{item_id}/{n}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "subtitle",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "n",
+            "in": "path",
+            "description": "Subtitle index, from the item's `subtitles`",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subtitle file",
+            "content": {
+              "text/plain": {}
+            }
+          },
+          "404": {
+            "description": "No such item or subtitle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "operationId": "version",
+        "responses": {
+          "200": {
+            "description": "API and server versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Action": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Tune to the next channel up (higher number, wrapping).",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "channel_up"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Tune to the next channel down (lower number, wrapping).",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "channel_down"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Tune to the channel with this number.",
+            "required": [
+              "number",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "go_to_channel"
+                ]
+              },
+              "number": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Tune to the channel with this ID.",
+            "required": [
+              "id",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "go_to_channel_id"
+                ]
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "toggle_pause"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Resume playback (no-op if playing).",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "play"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pause playback (no-op if paused).",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "pause"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Seek by this many seconds; negative is backwards.",
+            "required": [
+              "seconds",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "seek_relative"
+                ]
+              },
+              "seconds": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Skip to the channel's next item.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "next_item"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Step back to the channel's previous item.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "previous_item"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Move in a direction. With nothing open, Up/Down change channel and\nLeft/Right seek; with the guide open, they move its selection.",
+            "required": [
+              "direction",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "navigate"
+                ]
+              },
+              "direction": {
+                "$ref": "#/components/schemas/Direction"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Choose the highlighted thing (a channel in the guide), or show info\nwhen nothing is open.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "select"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Close whatever is open.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "back"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Show what is playing.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "show_info"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Open or close the channel guide.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "toggle_guide"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Cycle subtitle tracks (on/off with one track).",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "toggle_subtitles"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Switch between fullscreen and windowed.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "toggle_fullscreen"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Go quiet (e.g. the TV switched to another input): pause, save the\nposition, and hide the overlay, ready to wake.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "standby"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Come back from standby, resuming playback if standby paused it.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "wake"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Save the position and exit.",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "quit"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Something a viewer (or a program acting for one) asked for. Actions are\nsemantic, not device-shaped: a TV remote's D-pad, a gamepad, and arrow\nkeys all produce [`Action::Navigate`], and the client decides what it\nmeans in context.\n\nClients log and ignore actions they do not support yet."
+      },
+      "ActionAccepted": {
+        "type": "object",
+        "description": "Response to `POST /clients/{id}/actions`: the action was handed to the\nclient's control channel.",
+        "required": [
+          "client_id"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "description": "The client the action went to (useful when the request said\n`default`)."
+          }
+        }
+      },
+      "AdvanceReason": {
+        "type": "string",
+        "description": "Why a channel is advancing.",
+        "enum": [
+          "ended",
+          "skipped"
+        ]
+      },
+      "AdvanceRequest": {
+        "type": "object",
+        "description": "`POST /channels/{id}/advance`.",
+        "required": [
+          "from_item_id",
+          "reason"
+        ],
+        "properties": {
+          "from_item_id": {
+            "type": "string",
+            "description": "The item the client is advancing from. If it is not the channel's\ncurrent item, the channel has already moved on and the request\nreturns the current [`Now`] without advancing again."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AdvanceReason"
+          }
+        }
+      },
+      "ChannelSummary": {
+        "type": "object",
+        "description": "A channel as listed by `GET /channels`.",
+        "required": [
+          "id",
+          "number",
+          "name",
+          "item_count",
+          "position_ms"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Item",
+                "description": "What the channel is on, or `None` if it has no playable items."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "item_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of playable (not missing) items in the channel.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "position_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Saved playback position within `current`.",
+            "minimum": 0
+          }
+        }
+      },
+      "ClientInfo": {
+        "type": "object",
+        "description": "One entry of `GET /clients`: a client connected to the control channel\n(`/clients/connect`).",
+        "required": [
+          "id",
+          "connected_at_ms",
+          "last_active_ms",
+          "is_default",
+          "paused",
+          "standby"
+        ],
+        "properties": {
+          "connected_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When this connection was opened, in milliseconds since the Unix\nepoch."
+          },
+          "id": {
+            "type": "string",
+            "description": "The client's `X-Marathon-Client` ID; use it in\n`POST /clients/{id}/actions`."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "Whether this is the client `default` currently refers to."
+          },
+          "last_active_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the client last connected or sent an event. The most recent\none is the `default` client."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Whether playback is paused."
+          },
+          "playing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClientPlaying",
+                "description": "What it is playing; `None` before its first `now_playing` event, or\nwhile in standby."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "standby": {
+            "type": "boolean",
+            "description": "Whether the client is in standby."
+          }
+        }
+      },
+      "ClientPlaying": {
+        "type": "object",
+        "description": "What a connected client is playing, as far as its events tell.",
+        "required": [
+          "channel_id",
+          "channel_number",
+          "item_id",
+          "title"
+        ],
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          },
+          "channel_number": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable description, e.g. `Show · S03E14 · The Injury`."
+          }
+        }
+      },
+      "Direction": {
+        "type": "string",
+        "description": "A direction for [`Action::Navigate`].",
+        "enum": [
+          "up",
+          "down",
+          "left",
+          "right"
+        ]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Body of every error response.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description."
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "Machine-readable error codes.",
+        "enum": [
+          "bad_request",
+          "unauthorized",
+          "not_found",
+          "channel_empty",
+          "stale_item",
+          "upstream",
+          "internal"
+        ]
+      },
+      "Event": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "An item started playing (after a tune, an advance, or a skip).",
+            "required": [
+              "channel_id",
+              "channel_number",
+              "item_id",
+              "title",
+              "position_ms",
+              "event"
+            ],
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_number": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "now_playing"
+                ]
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "position_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Where playback started within the item.",
+                "minimum": 0
+              },
+              "title": {
+                "type": "string",
+                "description": "Human-readable description, e.g. `Show · S03E14 · The Injury`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The client tuned to a different channel.",
+            "required": [
+              "channel_id",
+              "channel_number",
+              "channel_name",
+              "event"
+            ],
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "channel_name": {
+                "type": "string"
+              },
+              "channel_number": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "channel_changed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "channel_id",
+              "item_id",
+              "position_ms",
+              "event"
+            ],
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "paused"
+                ]
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "position_ms": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "channel_id",
+              "item_id",
+              "position_ms",
+              "event"
+            ],
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "resumed"
+                ]
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "position_ms": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An item played to its end.",
+            "required": [
+              "channel_id",
+              "item_id",
+              "event"
+            ],
+            "properties": {
+              "channel_id": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "item_ended"
+                ]
+              },
+              "item_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "standby"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "wake"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Something went wrong; playback carries on where it can.",
+            "required": [
+              "message",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Something that happened on a client, for observers."
+      },
+      "EventKind": {
+        "type": "string",
+        "description": "Kinds of playback event in the history.",
+        "enum": [
+          "tuned",
+          "progress",
+          "ended",
+          "skipped",
+          "previous",
+          "paused",
+          "resumed"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "description": "`GET /health`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `\"ok\"` when the server can answer."
+          }
+        }
+      },
+      "HistoryEntry": {
+        "type": "object",
+        "description": "One entry of `GET /history`. (Not to be confused with [`Event`], what\nclients publish for observers.)",
+        "required": [
+          "id",
+          "ts_ms",
+          "kind"
+        ],
+        "properties": {
+          "channel_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reporting client's `X-Marathon-Client` header, if it sent one."
+          },
+          "id": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EventKind"
+          },
+          "position_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Playback position within the item when the event happened.",
+            "minimum": 0
+          },
+          "ts_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the event was recorded, in milliseconds since the Unix epoch."
+          }
+        }
+      },
+      "Item": {
+        "type": "object",
+        "description": "One playable video.",
+        "required": [
+          "id",
+          "source_id",
+          "path",
+          "title",
+          "subtitles",
+          "missing"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Duration, once a client or catalog provider has reported it.",
+            "minimum": 0
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Parsed episode number, if any.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable server-assigned ID."
+          },
+          "missing": {
+            "type": "boolean",
+            "description": "True if the file was not found by the most recent scan."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path within the source, `/`-separated."
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Parsed season number, if any.",
+            "minimum": 0
+          },
+          "show": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parsed show name, if any."
+          },
+          "source_id": {
+            "type": "string",
+            "description": "ID of the configured source the item comes from."
+          },
+          "subtitles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Subtitle"
+            },
+            "description": "Sidecar subtitles. Subtitles embedded in the video are not listed."
+          },
+          "title": {
+            "type": "string",
+            "description": "Episode title if one was parsed, otherwise the file name without its\nextension."
+          }
+        }
+      },
+      "NextItem": {
+        "type": "object",
+        "description": "An item to prefetch: what the channel will play after the current item.",
+        "required": [
+          "item",
+          "stream_url"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/Item"
+          },
+          "stream_url": {
+            "type": "string"
+          }
+        }
+      },
+      "Now": {
+        "type": "object",
+        "description": "What a channel is playing: the response to `GET /channels/{id}/now`,\n`advance`, and `previous`.",
+        "required": [
+          "channel_id",
+          "channel_number",
+          "channel_name",
+          "item",
+          "position_ms",
+          "stream_url"
+        ],
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "channel_number": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "item": {
+            "$ref": "#/components/schemas/Item",
+            "description": "The current item."
+          },
+          "next": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NextItem",
+                "description": "The item the channel will advance to, for prefetching. Computed\nwithout moving the channel. `None` only if it cannot be determined."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Saved playback position within `item`. This is the raw saved\nposition; clients apply the resume rewind and the finished threshold\n(PLAN.md §1) themselves.",
+            "minimum": 0
+          },
+          "stream_url": {
+            "type": "string",
+            "description": "Where to stream `item` from."
+          }
+        }
+      },
+      "PreviousRequest": {
+        "type": "object",
+        "description": "`POST /channels/{id}/previous`.",
+        "required": [
+          "from_item_id"
+        ],
+        "properties": {
+          "from_item_id": {
+            "type": "string",
+            "description": "The item the client is stepping back from. Like `advance`, the\nrequest only moves the channel if this is its current item."
+          }
+        }
+      },
+      "ProgressReport": {
+        "type": "object",
+        "description": "`POST /channels/{id}/progress`.",
+        "required": [
+          "item_id",
+          "position_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The item's duration, if the player knows it.",
+            "minimum": 0
+          },
+          "item_id": {
+            "type": "string",
+            "description": "The item the client is playing. Must be the channel's current item;\notherwise the report is stale and rejected with `409`."
+          },
+          "paused": {
+            "type": "boolean",
+            "description": "Whether playback is paused."
+          },
+          "position_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RelayedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Event"
+          },
+          {
+            "type": "object",
+            "required": [
+              "client_id",
+              "ts_ms"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The `X-Marathon-Client` ID of the client the event came from."
+              },
+              "ts_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "When the server received it, in milliseconds since the Unix epoch."
+              }
+            }
+          }
+        ],
+        "description": "An [`Event`] as relayed by the server on `GET /events`: the event's own\nfields, plus which client sent it and when the server received it.\n\n```\n# use marathon_api::{Event, RelayedEvent};\nlet relayed = RelayedEvent { client_id: \"c1\".into(), ts_ms: 1, event: Event::Standby };\nassert_eq!(\n    serde_json::to_string(&relayed).unwrap(),\n    r#\"{\"client_id\":\"c1\",\"ts_ms\":1,\"event\":\"standby\"}\"#\n);\n```"
+      },
+      "ScanReport": {
+        "type": "object",
+        "description": "`POST /library/rescan`: what the scan found.",
+        "required": [
+          "sources_scanned",
+          "items_present",
+          "added",
+          "updated",
+          "newly_missing",
+          "restored",
+          "errors"
+        ],
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items seen for the first time.",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sources that could not be scanned, with the reason. Their items are\nleft as they were."
+          },
+          "items_present": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items found by this scan.",
+            "minimum": 0
+          },
+          "newly_missing": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items that were present before and are now missing.",
+            "minimum": 0
+          },
+          "restored": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Items that were missing and are back.",
+            "minimum": 0
+          },
+          "sources_scanned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of sources scanned successfully.",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Known items whose file or parsed metadata changed.",
+            "minimum": 0
+          }
+        }
+      },
+      "Subtitle": {
+        "type": "object",
+        "description": "A sidecar subtitle file attached to an item.",
+        "required": [
+          "index",
+          "label",
+          "format",
+          "url"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "File format, the lowercase extension: `srt`, `vtt`, `ass`, or `ssa`."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index used in the subtitle URL.",
+            "minimum": 0
+          },
+          "label": {
+            "type": "string",
+            "description": "Everything between the video's name and the extension (`en.forced` in\n`Episode.en.forced.srt`), suitable as a track title. Empty if none."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Language tag taken from the file name (`en` in `Episode.en.srt`), if\nany."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where to fetch the file (an absolute path on the server)."
+          }
+        }
+      },
+      "VersionInfo": {
+        "type": "object",
+        "description": "`GET /version`.",
+        "required": [
+          "api_version",
+          "server_version"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "API version; see [`API_VERSION`].",
+            "minimum": 0
+          },
+          "server_version": {
+            "type": "string",
+            "description": "Version of the server software."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "security": [
+    {},
+    {
+      "bearer": []
+    }
+  ]
+}

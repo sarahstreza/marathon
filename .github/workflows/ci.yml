@@ -55,6 +55,40 @@ jobs:
           cargo clippy -p marathon-desktop -p marathon-input-cec --all-targets --locked --features $features -- -D warnings
           cargo test -p marathon-desktop -p marathon-input-cec --locked --features $features
 
+  # The Android client (M10, docs/ANDROID.md). Its OpenAPI snapshot and the
+  # Action/Event JSON fixtures are checked against the Rust side by
+  # `cargo test` in the check job above; this job builds and tests the app.
+  android:
+    name: android
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tuner scenarios match the Rust tests
+        working-directory: .
+        run: scripts/check-tuner-parity.sh
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+      # The runner image has an Android SDK with its licences accepted, but
+      # not necessarily the platform and build-tools this project targets;
+      # install them explicitly rather than rely on the image's contents or
+      # on the Android Gradle plugin downloading them mid-build.
+      - name: Install Android SDK packages
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew check :app:assembleDebug
+      - uses: actions/upload-artifact@v7
+        with:
+          name: marathon-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   seams:
     name: platform seams
     runs-on: ubuntu-latest
