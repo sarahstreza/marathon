@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Generates a small fake video library for testing Marathon.
 #
-# Usage: scripts/make-test-library.sh <dir>
+# Usage: [DURATION=<seconds>] scripts/make-test-library.sh <dir>
 #
-# Every clip is a few seconds of ffmpeg's `testsrc` pattern with a tone, its
+# Every clip is DURATION seconds (default 6) of ffmpeg's `testsrc` pattern with a tone, its
 # own filename burned into the frame, and a running timestamp (useful for
 # checking resume positions). Layout:
 #
@@ -18,6 +18,10 @@
 # programming rule. Start the server with:
 #
 #   cargo run -p marathond -- --config <dir>/marathon.toml
+#
+# Clips shorter than 30s always count as finished once started (PLAN.md §1's
+# max(30s, 2%) threshold), so tuning back in advances instead of resuming.
+# To check resuming, generate longer clips, e.g. DURATION=120.
 #
 # Re-running overwrites existing clips. Needs ffmpeg with the drawtext filter
 # (libfreetype + fontconfig). Never commit the output; .gitignore excludes it.
@@ -58,7 +62,11 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-DURATION=6
+DURATION="${DURATION:-6}"
+if ! [[ "$DURATION" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: DURATION must be a whole number of seconds, got '$DURATION'" >&2
+    exit 2
+fi
 count=0
 
 # make_clip <path relative to $out> [tone Hz]

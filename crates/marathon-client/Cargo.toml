@@ -12,3 +12,17 @@ workspace = true
 
 [dependencies]
 marathon-api.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+default = ["input-keyboard"]
+# Keyboard bindings as an InputSource (the windowing layer feeds it keys).
+input-keyboard = []

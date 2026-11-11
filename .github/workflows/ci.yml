@@ -34,9 +34,26 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # marathon-mpv links the system libmpv, found with pkg-config.
+      - name: Install libmpv (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev
+      - name: Install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mpv pkgconf
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+  seams:
+    name: platform seams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # marathon-client has no winit/glutin/gilrs dependency, and winit and
+      # glutin appear only in marathon-desktop's platform module (M3.5).
+      - run: scripts/check-seams.sh
 
   test-library:
     name: test library script

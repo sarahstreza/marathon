@@ -14,6 +14,10 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+mod control;
+
+pub use control::{Action, Direction, Event};
+
 /// Path prefix of every API route.
 pub const API_PREFIX: &str = "/api/v1";
 
@@ -225,9 +229,10 @@ impl From<AdvanceReason> for EventKind {
     }
 }
 
-/// One entry of `GET /history`.
+/// One entry of `GET /history`. (Not to be confused with [`Event`], what
+/// clients publish for observers.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct Event {
+pub struct HistoryEntry {
     pub id: String,
     /// When the event was recorded, in milliseconds since the Unix epoch.
     pub ts_ms: i64,
