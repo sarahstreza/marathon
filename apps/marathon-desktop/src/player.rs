@@ -84,8 +84,10 @@ impl MpvPlayer {
                 // that started last.
                 if self.started.is_some() && self.started == self.entry {
                     self.add_subtitles();
+                    Some(PlayerEvent::Started)
+                } else {
+                    None
                 }
-                None
             }
             Event::EndFile {
                 playlist_entry_id,
@@ -281,11 +283,14 @@ mod tests {
                 saw_position = player.position_ms();
             }
             if let Some(e) = player.on_event(&event) {
+                let done = e != PlayerEvent::Started;
                 reported.push(e);
-                break;
+                if done {
+                    break;
+                }
             }
         }
-        assert_eq!(reported, vec![PlayerEvent::Ended]);
+        assert_eq!(reported, vec![PlayerEvent::Started, PlayerEvent::Ended]);
         let position = saw_position.expect("playback started");
         assert!((480..=1000).contains(&position), "{position}");
     }

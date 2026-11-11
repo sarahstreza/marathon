@@ -31,11 +31,15 @@ pub struct PlayerError(pub String);
 /// Something the player reports back to the tuner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerEvent {
+    /// The most recently loaded file opened and started playing. Ends a
+    /// streak of failures.
+    Started,
     /// The most recently loaded file played to its end. Must not be sent
     /// for files that were replaced or stopped, nor for any file but the
     /// latest loaded one.
     Ended,
-    /// The most recently loaded file could not be played.
+    /// The most recently loaded file could not be opened or played. The
+    /// tuner skips ahead.
     Failed(String),
 }
 

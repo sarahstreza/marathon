@@ -30,17 +30,11 @@ pub fn translate(key: &WinitKey) -> Option<Key> {
     })
 }
 
-/// Whether holding the key down should repeat its action. Seeking does;
-/// flipping channels or toggling things on auto-repeat would be chaos.
-pub fn repeats(key: Key) -> bool {
-    matches!(key, Key::ArrowLeft | Key::ArrowRight)
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use marathon_client::Action;
+    use marathon_api::{Action, Direction};
     use marathon_client::keyboard::Keyboard;
 
     use super::*;
@@ -53,30 +47,30 @@ mod tests {
         WinitKey::Character(s.into())
     }
 
+    fn named(k: NamedKey) -> WinitKey {
+        WinitKey::Named(k)
+    }
+
     /// Every keyboard binding in PLAN.md §9, from the winit key event to
     /// the Action.
     #[test]
     fn every_binding_from_winit_to_action() {
+        let nav = |direction| Action::Navigate { direction };
         let cases = [
-            (WinitKey::Named(NamedKey::PageUp), Action::ChannelUp),
-            (WinitKey::Named(NamedKey::ArrowUp), Action::ChannelUp),
-            (WinitKey::Named(NamedKey::PageDown), Action::ChannelDown),
-            (WinitKey::Named(NamedKey::ArrowDown), Action::ChannelDown),
-            (WinitKey::Named(NamedKey::Space), Action::TogglePause),
-            (
-                WinitKey::Named(NamedKey::ArrowLeft),
-                Action::SeekRelative(-10),
-            ),
-            (
-                WinitKey::Named(NamedKey::ArrowRight),
-                Action::SeekRelative(10),
-            ),
+            (named(NamedKey::ArrowUp), nav(Direction::Up)),
+            (named(NamedKey::ArrowDown), nav(Direction::Down)),
+            (named(NamedKey::ArrowLeft), nav(Direction::Left)),
+            (named(NamedKey::ArrowRight), nav(Direction::Right)),
+            (named(NamedKey::PageUp), Action::ChannelUp),
+            (named(NamedKey::PageDown), Action::ChannelDown),
+            (named(NamedKey::Enter), Action::Select),
+            (named(NamedKey::Space), Action::TogglePause),
+            (named(NamedKey::Escape), Action::Back),
             (ch("n"), Action::NextItem),
             (ch("N"), Action::NextItem),
             (ch("p"), Action::PreviousItem),
             (ch("i"), Action::ShowInfo),
             (ch("g"), Action::ToggleGuide),
-            (WinitKey::Named(NamedKey::Escape), Action::Back),
             (ch("q"), Action::Quit),
             (ch("s"), Action::ToggleSubtitles),
             (ch("f"), Action::ToggleFullscreen),
@@ -93,22 +87,17 @@ mod tests {
         for key in [ch("1"), ch("2")] {
             assert_eq!(kb.press(translate(&key).unwrap(), now), None);
         }
-        let enter = translate(&WinitKey::Named(NamedKey::Enter)).unwrap();
-        assert_eq!(kb.press(enter, now), Some(Action::GoToChannel(12)));
+        let enter = translate(&named(NamedKey::Enter)).unwrap();
+        assert_eq!(
+            kb.press(enter, now),
+            Some(Action::GoToChannel { number: 12 })
+        );
     }
 
     #[test]
     fn unbound_keys_translate_to_nothing() {
-        assert_eq!(translate(&WinitKey::Named(NamedKey::F1)), None);
+        assert_eq!(translate(&named(NamedKey::F1)), None);
         assert_eq!(translate(&ch("ab")), None);
         assert_eq!(action(ch("x")), None);
-    }
-
-    #[test]
-    fn only_seeking_repeats() {
-        assert!(repeats(Key::ArrowLeft));
-        assert!(repeats(Key::ArrowRight));
-        assert!(!repeats(Key::ArrowUp));
-        assert!(!repeats(Key::Character('n')));
     }
 }

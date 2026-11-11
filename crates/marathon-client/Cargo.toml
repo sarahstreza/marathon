@@ -21,3 +21,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[features]
+default = ["input-keyboard"]
+# Keyboard bindings as an InputSource (the windowing layer feeds it keys).
+input-keyboard = []

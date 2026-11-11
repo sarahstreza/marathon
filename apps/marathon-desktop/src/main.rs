@@ -4,39 +4,52 @@
 //! marathon-desktop [--server http://127.0.0.1:7878] [--token T] [--channel N] [--windowed]
 //! ```
 //!
-//! Two threads:
+//! How the pieces fit (PLAN.md §9):
 //!
-//! - the main thread runs the winit event loop, owns the GL context, and
-//!   renders mpv's video ([`window`]);
-//! - the tuner thread runs the [`marathon_client::tuner::Tuner`], making
-//!   the (blocking) API calls and commanding mpv ([`controller`]).
+//! ```text
+//! platform (window, keys) ──Key──► keyboard InputSource ──Action──► action bus
+//!                                                                     │ route()
+//!                        ◄── fullscreen / quit ───────────────────────┤
+//!                                                                     ▼
+//! platform ◄── frames ── renderer ◄── mpv ◄── MpvPlayer ◄── tuner thread
+//! ```
 //!
-//! libmpv is thread-safe, so both hold handles to the same player. Keys
-//! map to actions (see `marathon_client::keyboard` for the bindings).
-//! There is no overlay yet (PLAN.md M5): channel changes and info are
-//! logged to the console. Logging is controlled with `RUST_LOG` (default
-//! `info`; `RUST_LOG=info,mpv=debug` shows mpv's own log).
+//! - [`platform`]: the main thread's event loop and window; the only code
+//!   that knows about winit/glutin.
+//! - [`renderer`]: draws mpv's video into any [`surface::Surface`].
+//! - [`controller`]: routes actions and runs the tuner thread, which makes
+//!   the (blocking) API calls and commands mpv through [`player`].
+//!
+//! libmpv is thread-safe, so the renderer and the tuner thread share one
+//! player. There is no overlay yet (M5): channel changes, info, and the
+//! guide are logged to the console. Logging is controlled with `RUST_LOG`
+//! (default `info`; `RUST_LOG=info,mpv=debug` shows mpv's own log).
 
 mod controller;
-mod input;
+mod platform;
 mod player;
-mod window;
+mod renderer;
+mod surface;
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
+use std::thread::JoinHandle;
 
 use anyhow::Context;
 use clap::Parser;
+use marathon_api::Action;
 use marathon_client::api::{Api, HttpApi};
+use marathon_client::bus::{ActionBus, BusClosed};
 use marathon_client::client_id;
+use marathon_client::input::InputSources;
+use marathon_client::keyboard::KeyboardSource;
 use marathon_client::tuner::{SystemClock, Tuner, TunerConfig};
 use marathon_mpv::Mpv;
 use tracing_subscriber::EnvFilter;
-use winit::event_loop::EventLoop;
 
-use crate::controller::Msg;
+use crate::controller::{Exit, Msg, Route, WindowCommand};
+use crate::platform::{Hooks, Options, Platform};
 use crate::player::MpvPlayer;
-use crate::window::{App, UserEvent};
 
 /// Watches Marathon channels.
 #[derive(Debug, Parser)]
@@ -59,6 +72,32 @@ struct Args {
     /// in the user's config directory.
     #[arg(long, value_name = "PATH")]
     client_id_file: Option<PathBuf>,
+}
+
+/// What the window calls back into: starting playback once it can be
+/// shown, and shutting down in order.
+struct App {
+    tuner: Sender<Msg>,
+    tuner_thread: Option<JoinHandle<Exit>>,
+    inputs: InputSources,
+}
+
+impl Hooks for App {
+    fn ready(&mut self) {
+        let _ = self.tuner.send(Msg::Start);
+    }
+
+    fn shutdown(&mut self) {
+        // No more input, then let the tuner report progress and stop.
+        self.inputs.stop_all();
+        let _ = self.tuner.send(Msg::Action(Action::Quit));
+        if let Some(thread) = self.tuner_thread.take() {
+            match thread.join() {
+                Ok(exit) => tracing::debug!(?exit, "tuner thread stopped"),
+                Err(_) => tracing::error!("tuner thread panicked"),
+            }
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -92,13 +131,27 @@ fn main() -> anyhow::Result<()> {
     let (mpv, events) = Mpv::new(player::mpv_options()).context("cannot start mpv")?;
     player::set_http_headers(&mpv, api.media_headers())?;
     mpv.request_log_messages("info")?;
-    let (major, minor) = marathon_mpv::client_api_version();
-    tracing::debug!(major, minor, "libmpv client API");
 
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
-        .build()
-        .context("cannot start the event loop")?;
-    let proxy = event_loop.create_proxy();
+    let platform = Platform::new().context("cannot start the event loop")?;
+    let window = platform.handle();
+
+    // The action bus: window actions to the platform, the rest to the
+    // tuner thread.
+    let (tx, rx) = mpsc::channel::<Msg>();
+    let bus = {
+        let (tx, window) = (tx.clone(), window.clone());
+        ActionBus::new(move |sourced| {
+            match controller::route(sourced.action) {
+                Route::Window(WindowCommand::ToggleFullscreen) => window.toggle_fullscreen(),
+                Route::Window(WindowCommand::Quit) => window.quit(),
+                Route::Tuner(action) => tx.send(Msg::Action(action)).map_err(|_| BusClosed)?,
+            }
+            Ok(())
+        })
+    };
+    let mut inputs = InputSources::new();
+    let (keyboard, keys) = KeyboardSource::new();
+    inputs.start(Box::new(keyboard), &bus)?;
 
     let tuner = Tuner::new(
         api,
@@ -109,24 +162,29 @@ fn main() -> anyhow::Result<()> {
             ..TunerConfig::default()
         },
     );
-    let (tx, rx) = mpsc::channel::<Msg>();
     let wake = tx.clone();
-    let stopped = proxy.clone();
     let start_channel = args.channel;
     let tuner_thread = std::thread::Builder::new()
         .name("tuner".into())
         .spawn(move || {
             let exit = controller::run(tuner, events, rx, wake, start_channel);
             // Tell the window, in case it did not ask us to stop.
-            let _ = stopped.send_event(UserEvent::TunerStopped);
+            window.quit();
             exit
         })
         .context("cannot start the tuner thread")?;
 
-    let mut app = App::new(mpv, proxy, tx, tuner_thread, !args.windowed);
-    event_loop.run_app(&mut app)?;
-    match app.error.take() {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
+    let app = App {
+        tuner: tx,
+        tuner_thread: Some(tuner_thread),
+        inputs,
+    };
+    platform.run(
+        Options {
+            fullscreen: !args.windowed,
+        },
+        mpv,
+        keys,
+        app,
+    )
 }

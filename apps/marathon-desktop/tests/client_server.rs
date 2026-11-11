@@ -13,8 +13,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use marathon_api::{AdvanceReason, AdvanceRequest, ErrorCode, EventKind, ProgressReport};
-use marathon_client::Action;
+use marathon_api::{Action, AdvanceReason, AdvanceRequest, ErrorCode, EventKind, ProgressReport};
 use marathon_client::api::{Api, ApiError, HttpApi};
 use marathon_client::player::{LoadRequest, Player, PlayerError, PlayerEvent};
 use marathon_client::tuner::{SystemClock, Tuner, TunerConfig};
@@ -303,7 +302,9 @@ fn tuner_against_a_real_server() {
 
     // Quit on channel 2, then a fresh tuner for the same client starts
     // there, at the reported position.
-    tuner.handle_action(Action::GoToChannel(2)).unwrap();
+    tuner
+        .handle_action(Action::GoToChannel { number: 2 })
+        .unwrap();
     *player.position.lock().unwrap() = Some(60_000);
     tuner.handle_action(Action::Quit).unwrap();
     let mut again = Tuner::new(server.api("tv"), player.clone(), SystemClock, config);

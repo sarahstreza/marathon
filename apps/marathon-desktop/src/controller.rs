@@ -1,19 +1,48 @@
-//! The tuner thread: owns the [`Tuner`] and mpv's event queue, so API calls
-//! (which block) never stall the render thread.
+//! Where actions go, and the tuner thread.
 //!
-//! It waits on one channel for [`Msg`]s: the start signal and viewer
-//! actions from the window, and wakeups from mpv's event callback. Between messages it wakes for
-//! the tuner's periodic progress reports.
+//! [`route`] splits actions from the bus: window actions go to the
+//! platform, everything else to the tuner thread.
+//!
+//! The tuner thread owns the [`Tuner`] and mpv's event queue, so API calls
+//! (which block) never stall the render thread. It waits on one channel
+//! for [`Msg`]s: the start signal, actions from the bus, and wakeups from
+//! mpv's event callback. Between messages it wakes for the tuner's
+//! periodic progress reports.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use marathon_client::Action;
+use marathon_api::Action;
 use marathon_client::api::HttpApi;
 use marathon_client::tuner::{Flow, SystemClock, Tuner};
 use marathon_mpv::{Event, Events, Format, LogLevel, PropertyValue};
 
 use crate::player::MpvPlayer;
+
+/// Where an action is handled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route {
+    /// By the window: fullscreen, or quitting (which shuts everything down
+    /// in order, including the tuner).
+    Window(WindowCommand),
+    /// By the tuner thread.
+    Tuner(Action),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowCommand {
+    ToggleFullscreen,
+    Quit,
+}
+
+/// Decides where an action from the bus goes.
+pub fn route(action: Action) -> Route {
+    match action {
+        Action::ToggleFullscreen => Route::Window(WindowCommand::ToggleFullscreen),
+        Action::Quit => Route::Window(WindowCommand::Quit),
+        other => Route::Tuner(other),
+    }
+}
 
 /// Messages to the tuner thread.
 #[derive(Debug)]
@@ -73,11 +102,14 @@ pub fn run(
                     tracing::error!(%err, "cannot tune in");
                 }
             }
-            Ok(Msg::Action(action)) => match tuner.handle_action(action) {
-                Ok(Flow::Quit) => return Exit::Quit,
-                Ok(Flow::Continue) => {}
-                Err(err) => tracing::warn!(?action, %err, "action failed"),
-            },
+            Ok(Msg::Action(action)) => {
+                let what = format!("{action:?}");
+                match tuner.handle_action(action) {
+                    Ok(Flow::Quit) => return Exit::Quit,
+                    Ok(Flow::Continue) => {}
+                    Err(err) => tracing::warn!(action = what, %err, "action failed"),
+                }
+            }
             Ok(Msg::MpvWakeup) => {
                 if drain_events(&mut tuner, &mut events).is_break() {
                     return Exit::Gone;
@@ -120,7 +152,7 @@ fn drain_events(tuner: &mut DesktopTuner, events: &mut Events) -> std::ops::Cont
         if let Some(player_event) = tuner.player_mut().on_event(&event)
             && let Err(err) = tuner.handle_player_event(player_event)
         {
-            tracing::warn!(%err, "cannot handle end of item");
+            tracing::warn!(%err, "cannot handle player event");
         }
     }
     std::ops::ControlFlow::Continue(())
@@ -135,6 +167,32 @@ fn log_mpv(prefix: &str, level: LogLevel, text: &str) {
         LogLevel::Info => tracing::debug!(target: "mpv", "[{prefix}] {text}"),
         LogLevel::Verbose | LogLevel::Debug => {
             tracing::trace!(target: "mpv", "[{prefix}] {text}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use marathon_api::Direction;
+
+    use super::*;
+
+    #[test]
+    fn window_actions_go_to_the_window_and_the_rest_to_the_tuner() {
+        assert_eq!(
+            route(Action::ToggleFullscreen),
+            Route::Window(WindowCommand::ToggleFullscreen)
+        );
+        assert_eq!(route(Action::Quit), Route::Window(WindowCommand::Quit));
+        for action in [
+            Action::ChannelUp,
+            Action::Navigate {
+                direction: Direction::Up,
+            },
+            Action::Standby,
+            Action::GoToChannel { number: 3 },
+        ] {
+            assert_eq!(route(action.clone()), Route::Tuner(action));
         }
     }
 }

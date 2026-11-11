@@ -11,8 +11,9 @@
 //! inputs, all from one thread:
 //!
 //! - [`Tuner::start`] once, to tune the first channel;
-//! - [`Tuner::handle_action`] for viewer input;
-//! - [`Tuner::handle_player_event`] when the player finishes or fails;
+//! - [`Tuner::handle_action`] for actions from the action bus;
+//! - [`Tuner::handle_player_event`] when the player starts, finishes, or
+//!   fails an item;
 //! - [`Tuner::tick`] by [`Tuner::next_deadline`], for periodic progress
 //!   reports.
 //!
@@ -20,18 +21,28 @@
 //! which block on the [`Api`]. Between calls the tuner is [`State::Idle`]
 //! or [`State::Playing`].
 //!
-//! Semantics from PLAN.md §1 implemented here: the resume rewind, the
-//! finished threshold on tune-in, and progress reporting (every interval
-//! while playing, and immediately on pause, channel change, and quit).
+//! Semantics implemented here:
+//!
+//! - PLAN.md §1: the resume rewind, the finished threshold on tune-in, and
+//!   progress reporting (every interval while playing, and immediately on
+//!   pause, channel change, and quit).
+//! - PLAN.md §9: context-dependent actions (`Navigate`, `Select`, `Back`)
+//!   are resolved by [`Navigation`]; what happens is published as
+//!   [`Event`]s through the sink set with [`Tuner::with_event_sink`].
+//! - "Keeps going": an item that fails to load or play is skipped with an
+//!   [`Event::Error`]. After [`TunerConfig::max_consecutive_failures`]
+//!   failures in a row the tuner stops retrying and says so, rather than
+//!   looping forever.
 
 use std::time::{Duration, Instant};
 
 use marathon_api::{
-    AdvanceReason, AdvanceRequest, ChannelSummary, ErrorCode, Now, PreviousRequest, ProgressReport,
+    Action, AdvanceReason, AdvanceRequest, ChannelSummary, ErrorCode, Event, Now, PreviousRequest,
+    ProgressReport,
 };
 
-use crate::Action;
 use crate::api::{Api, ApiError};
+use crate::navigation::{Navigation, Resolved};
 use crate::player::{LoadRequest, Player, PlayerError, PlayerEvent, SubtitleTrack};
 
 /// Tuning knobs. [`TunerConfig::default`] has the values from PLAN.md §12.
@@ -45,6 +56,9 @@ pub struct TunerConfig {
     /// `max(finished_min, finished_fraction × duration)` of its end.
     pub finished_min: Duration,
     pub finished_fraction: f64,
+    /// How many items in a row may fail before the tuner stops skipping
+    /// ahead and waits for the viewer.
+    pub max_consecutive_failures: u32,
     /// This client's ID, used to find the channel it watched last.
     pub client_id: Option<String>,
 }
@@ -56,6 +70,7 @@ impl Default for TunerConfig {
             progress_interval: Duration::from_secs(5),
             finished_min: Duration::from_secs(30),
             finished_fraction: 0.02,
+            max_consecutive_failures: 5,
             client_id: None,
         }
     }
@@ -111,7 +126,7 @@ pub enum TunerError {
     #[error("the server has no channels with anything to play")]
     NoChannels,
     #[error("there is no channel {0}")]
-    NoSuchChannel(u32),
+    NoSuchChannel(String),
 }
 
 /// What the caller should do after an action.
@@ -134,13 +149,16 @@ pub enum State {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playing {
     /// The server's answer for the channel; `now.item` is what the player
-    /// has loaded.
+    /// has loaded (or failed to).
     pub now: Now,
     /// The saved position this item was resumed from, while playback is
     /// still inside the resume rewind (see [`Tuner::report_progress`]).
     resume_floor: Option<u64>,
     last_report: Instant,
 }
+
+/// Receives the tuner's [`Event`]s.
+pub type EventSink = Box<dyn FnMut(Event) + Send>;
 
 /// The Tuner state machine. See the module docs.
 pub struct Tuner<A, P, C = SystemClock> {
@@ -150,6 +168,10 @@ pub struct Tuner<A, P, C = SystemClock> {
     config: TunerConfig,
     channels: Vec<ChannelSummary>,
     state: State,
+    navigation: Navigation,
+    events: EventSink,
+    /// Items in a row that failed to load or play.
+    failures: u32,
 }
 
 impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
@@ -161,7 +183,16 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             config,
             channels: Vec::new(),
             state: State::Idle,
+            navigation: Navigation::default(),
+            events: Box::new(|event| tracing::debug!(?event, "event")),
+            failures: 0,
         }
+    }
+
+    /// Sends the tuner's events to `sink` instead of the debug log.
+    pub fn with_event_sink(mut self, sink: impl FnMut(Event) + Send + 'static) -> Self {
+        self.events = Box::new(sink);
+        self
     }
 
     pub fn state(&self) -> &State {
@@ -181,12 +212,21 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         &self.channels
     }
 
+    /// What is open on screen (the guide), for the overlay.
+    pub fn navigation(&self) -> &Navigation {
+        &self.navigation
+    }
+
     pub fn player(&self) -> &P {
         &self.player
     }
 
     pub fn player_mut(&mut self) -> &mut P {
         &mut self.player
+    }
+
+    fn emit(&mut self, event: Event) {
+        (self.events)(event);
     }
 
     /// Fetches the channel list and tunes the first channel: channel
@@ -200,7 +240,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 .channels
                 .iter()
                 .find(|c| c.number == number)
-                .ok_or(TunerError::NoSuchChannel(number))?,
+                .ok_or_else(|| TunerError::NoSuchChannel(number.to_string()))?,
             None => match self.last_watched() {
                 Some(c) => c,
                 None => self
@@ -246,21 +286,25 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         Ok(())
     }
 
-    /// Handles one viewer action.
+    /// Handles one action from the bus. Actions this client does not
+    /// support yet are logged and ignored.
     pub fn handle_action(&mut self, action: Action) -> Result<Flow, TunerError> {
         match action {
             Action::ChannelUp => self.step_channel(1)?,
             Action::ChannelDown => self.step_channel(-1)?,
-            Action::GoToChannel(number) => self.go_to_channel(number)?,
-            Action::TogglePause => {
-                if matches!(self.state, State::Playing(_)) {
-                    let paused = !self.player.is_paused();
-                    self.player.set_paused(paused);
-                    tracing::info!(paused, "toggled pause");
-                    self.report_progress();
-                }
+            Action::GoToChannel { number } => {
+                self.go_to_channel(|c| c.number == number, || number.to_string())?
             }
-            Action::SeekRelative(seconds) => {
+            Action::GoToChannelId { id } => {
+                self.go_to_channel(|c| c.id == id, || id.clone())?;
+            }
+            Action::TogglePause => {
+                let paused = !self.player.is_paused();
+                self.set_paused(paused);
+            }
+            Action::Play => self.set_paused(false),
+            Action::Pause => self.set_paused(true),
+            Action::SeekRelative { seconds } => {
                 if let State::Playing(playing) = &mut self.state {
                     // An explicit seek is where the viewer wants to be,
                     // even if it is behind the resume point.
@@ -270,12 +314,42 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             }
             Action::NextItem => self.skip(Direction::Next)?,
             Action::PreviousItem => self.skip(Direction::Previous)?,
+            Action::Navigate { direction } => {
+                match self.navigation.navigate(direction, &self.channels) {
+                    Resolved::Action(action) => return self.handle_action(action),
+                    Resolved::GuideMoved => self.log_guide(),
+                    Resolved::Nothing => {}
+                }
+            }
+            Action::Select => match self.navigation.select(&self.channels) {
+                Resolved::Action(action) => return self.handle_action(action),
+                Resolved::GuideMoved | Resolved::Nothing => {}
+            },
+            Action::Back => {
+                if self.navigation.close() {
+                    tracing::info!("guide closed");
+                }
+            }
             Action::ShowInfo => self.log_info(),
-            Action::ToggleGuide => self.log_guide(),
+            Action::ToggleGuide => {
+                if self.navigation.close() {
+                    tracing::info!("guide closed");
+                } else {
+                    if let Err(err) = self.refresh_channels() {
+                        tracing::warn!(%err, "cannot refresh channels");
+                    }
+                    let current = self.now().map(|n| n.channel_id.clone());
+                    self.navigation
+                        .open_guide(&self.channels, current.as_deref());
+                    self.log_guide();
+                }
+            }
             Action::ToggleSubtitles => self.player.toggle_subtitles(),
-            // Back closes overlays and fullscreen is the window's business;
-            // neither concerns the tuner.
-            Action::Back | Action::ToggleFullscreen => {}
+            // Window business, routed there by the app; nothing to do here.
+            Action::ToggleFullscreen => {}
+            Action::Standby | Action::Wake => {
+                tracing::info!(?action, "not supported yet; ignoring");
+            }
             Action::Quit => {
                 self.report_progress();
                 self.player.stop();
@@ -288,19 +362,15 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
     /// Handles a report from the player.
     pub fn handle_player_event(&mut self, event: PlayerEvent) -> Result<(), TunerError> {
         match event {
-            PlayerEvent::Ended => self.advance_on_end(),
-            PlayerEvent::Failed(reason) => {
-                if let Some(now) = self.now() {
-                    tracing::error!(
-                        channel = now.channel_number,
-                        item = %now.item.id,
-                        path = %now.item.path,
-                        %reason,
-                        "cannot play item; press N to skip it"
-                    );
-                }
+            PlayerEvent::Started => {
+                self.failures = 0;
                 Ok(())
             }
+            PlayerEvent::Ended => self.advance_on_end(),
+            PlayerEvent::Failed(reason) => match self.after_failure(&reason)? {
+                Some(next) => self.play(next),
+                None => Ok(()),
+            },
         }
     }
 
@@ -367,9 +437,37 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         }
     }
 
+    fn set_paused(&mut self, paused: bool) {
+        let State::Playing(playing) = &self.state else {
+            return;
+        };
+        if self.player.is_paused() == paused {
+            return;
+        }
+        let (channel_id, item_id) = (playing.now.channel_id.clone(), playing.now.item.id.clone());
+        self.player.set_paused(paused);
+        tracing::info!(paused, "pause");
+        self.report_progress();
+        let position_ms = self.player.position_ms().unwrap_or_default();
+        self.emit(if paused {
+            Event::Paused {
+                channel_id,
+                item_id,
+                position_ms,
+            }
+        } else {
+            Event::Resumed {
+                channel_id,
+                item_id,
+                position_ms,
+            }
+        });
+    }
+
     /// Tunes to `channel_id`, reporting progress on the current channel
     /// first. If the saved position counts as finished, advances instead
-    /// of resuming. On failure, whatever was playing keeps playing.
+    /// of resuming. On failure to reach the server, whatever was playing
+    /// keeps playing.
     fn tune(&mut self, channel_id: &str) -> Result<(), TunerError> {
         self.report_progress();
         let mut now = self.api.now(channel_id)?;
@@ -397,23 +495,94 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             position = %format_ms(now.position_ms),
             "tuned in"
         );
+        self.emit(Event::ChannelChanged {
+            channel_id: now.channel_id.clone(),
+            channel_number: now.channel_number,
+            channel_name: now.channel_name.clone(),
+        });
+        // A fresh choice by the viewer gets a fresh set of retries.
+        self.failures = 0;
         self.play(now)
     }
 
-    /// Loads `now` into the player, resuming with the rewind.
-    fn play(&mut self, now: Now) -> Result<(), TunerError> {
-        let start_ms = self.config.resume_at(now.position_ms);
-        self.player.load(&LoadRequest {
-            url: now.stream_url.clone(),
-            start_ms,
-            subtitles: subtitle_tracks(&now.item),
-        })?;
-        self.state = State::Playing(Box::new(Playing {
-            resume_floor: (now.position_ms > start_ms).then_some(now.position_ms),
-            now,
-            last_report: self.clock.now(),
-        }));
-        Ok(())
+    /// Loads `now` into the player, resuming with the rewind. If the player
+    /// cannot load it, skips ahead (see [`Tuner::after_failure`]).
+    fn play(&mut self, mut now: Now) -> Result<(), TunerError> {
+        loop {
+            let start_ms = self.config.resume_at(now.position_ms);
+            let loaded = self.player.load(&LoadRequest {
+                url: now.stream_url.clone(),
+                start_ms,
+                subtitles: subtitle_tracks(&now.item),
+            });
+            let event = Event::NowPlaying {
+                channel_id: now.channel_id.clone(),
+                channel_number: now.channel_number,
+                item_id: now.item.id.clone(),
+                title: describe(&now),
+                position_ms: start_ms,
+            };
+            self.state = State::Playing(Box::new(Playing {
+                resume_floor: (now.position_ms > start_ms).then_some(now.position_ms),
+                now,
+                last_report: self.clock.now(),
+            }));
+            match loaded {
+                Ok(()) => {
+                    self.emit(event);
+                    return Ok(());
+                }
+                Err(err) => match self.after_failure(&err.to_string())? {
+                    Some(next) => now = next,
+                    None => return Ok(()),
+                },
+            }
+        }
+    }
+
+    /// The current item failed to load or play: report it and skip ahead
+    /// ("keeps going"). Returns the item to try next, or `None` once too
+    /// many items in a row have failed, in which case playback stops and
+    /// the viewer is told.
+    fn after_failure(&mut self, reason: &str) -> Result<Option<Now>, TunerError> {
+        let State::Playing(playing) = &self.state else {
+            return Ok(None);
+        };
+        let now = &playing.now;
+        let (channel_id, item_id) = (now.channel_id.clone(), now.item.id.clone());
+        let message = format!(
+            "cannot play {} on channel {}: {reason}",
+            now.item.path, now.channel_number
+        );
+        let number = now.channel_number;
+        self.failures += 1;
+        tracing::warn!(%message, failures = self.failures, "skipping");
+        self.emit(Event::Error { message });
+
+        if self.failures >= self.config.max_consecutive_failures {
+            let message = format!(
+                "channel {number}: {} items in a row failed to play; stopped trying. \
+                 Change channel or skip to try again",
+                self.failures
+            );
+            tracing::error!(%message);
+            self.emit(Event::Error { message });
+            self.player.stop();
+            return Ok(None);
+        }
+        let next = self.api.advance(
+            &channel_id,
+            &AdvanceRequest {
+                from_item_id: item_id,
+                reason: AdvanceReason::Skipped,
+            },
+        )?;
+        tracing::info!(
+            channel = next.channel_number,
+            item = %describe(&next),
+            "skipped ahead"
+        );
+        Ok(Some(next))
     }
 
     /// The player finished the current item: advance the channel. The
@@ -425,20 +594,34 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         };
         let channel_id = playing.now.channel_id.clone();
         let from_item_id = playing.now.item.id.clone();
-        let preloaded = match &playing.now.next {
+        let ended = Event::ItemEnded {
+            channel_id: channel_id.clone(),
+            item_id: from_item_id.clone(),
+        };
+        let prefetch = playing.now.next.as_ref().map(|next| Now {
+            item: next.item.clone(),
+            position_ms: 0,
+            stream_url: next.stream_url.clone(),
+            next: None,
+            ..playing.now.clone()
+        });
+        self.emit(ended);
+        // It played, so the failure streak is over.
+        self.failures = 0;
+        let preloaded = match prefetch {
             Some(next) => {
-                self.player.load(&LoadRequest {
+                let loaded = self.player.load(&LoadRequest {
                     url: next.stream_url.clone(),
                     start_ms: 0,
                     subtitles: subtitle_tracks(&next.item),
-                })?;
-                Some(Now {
-                    item: next.item.clone(),
-                    position_ms: 0,
-                    stream_url: next.stream_url.clone(),
-                    next: None,
-                    ..playing.now.clone()
-                })
+                });
+                match loaded {
+                    Ok(()) => Some(next),
+                    Err(err) => {
+                        tracing::warn!(%err, "cannot preload the next item");
+                        None
+                    }
+                }
             }
             None => None,
         };
@@ -463,7 +646,6 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 return Err(err.into());
             }
         };
-        let preloaded = preloaded.map(|n| n.item.id);
         tracing::info!(
             channel = now.channel_number,
             name = %now.channel_name,
@@ -474,7 +656,16 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         // another client moved the channel meanwhile, in which case it may
         // also have a saved position worth resuming.
         let rewind_ms = u64::try_from(self.config.resume_rewind.as_millis()).unwrap_or(u64::MAX);
-        if preloaded.as_ref() == Some(&now.item.id) && now.position_ms <= rewind_ms {
+        if preloaded.map(|n| n.item.id).as_ref() == Some(&now.item.id)
+            && now.position_ms <= rewind_ms
+        {
+            self.emit(Event::NowPlaying {
+                channel_id: now.channel_id.clone(),
+                channel_number: now.channel_number,
+                item_id: now.item.id.clone(),
+                title: describe(&now),
+                position_ms: 0,
+            });
             self.state = State::Playing(Box::new(Playing {
                 now,
                 resume_floor: None,
@@ -511,6 +702,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             ?direction,
             "skipped"
         );
+        self.failures = 0;
         self.play(now)
     }
 
@@ -542,19 +734,21 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         self.tune(&id)
     }
 
-    fn go_to_channel(&mut self, number: u32) -> Result<(), TunerError> {
-        let find = |channels: &[ChannelSummary]| {
-            channels
-                .iter()
-                .find(|c| c.number == number)
-                .map(|c| c.id.clone())
-        };
+    /// Tunes to the channel matching `wanted`, refreshing the channel list
+    /// once if none does. `name` describes the channel for errors.
+    fn go_to_channel(
+        &mut self,
+        wanted: impl Fn(&ChannelSummary) -> bool,
+        name: impl Fn() -> String,
+    ) -> Result<(), TunerError> {
+        let find =
+            |channels: &[ChannelSummary]| channels.iter().find(|c| wanted(c)).map(|c| c.id.clone());
         let id = match find(&self.channels) {
             Some(id) => id,
             None => {
                 // Channels may have been added to the config since.
                 self.refresh_channels()?;
-                find(&self.channels).ok_or(TunerError::NoSuchChannel(number))?
+                find(&self.channels).ok_or_else(|| TunerError::NoSuchChannel(name()))?
             }
         };
         if self.now().map(|n| &n.channel_id) == Some(&id) {
@@ -578,17 +772,18 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         }
     }
 
-    fn log_guide(&mut self) {
-        if let Err(err) = self.refresh_channels() {
-            tracing::warn!(%err, "cannot refresh channels");
-        }
-        for c in &self.channels {
+    /// Draws the guide as log lines, marking the highlighted channel. (The
+    /// overlay comes in M5.)
+    fn log_guide(&self) {
+        let highlighted = self.navigation.highlighted();
+        for (i, c) in self.channels.iter().enumerate() {
             let on = c
                 .current
                 .as_ref()
                 .map(|i| i.title.as_str())
                 .unwrap_or("(nothing)");
-            tracing::info!(channel = c.number, name = %c.name, on, "guide");
+            let marker = if Some(i) == highlighted { ">" } else { " " };
+            tracing::info!("guide {marker} {:>3} {} — {on}", c.number, c.name);
         }
     }
 }

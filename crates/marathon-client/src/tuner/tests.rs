@@ -3,9 +3,11 @@
 //! the order of API calls and player commands.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
-use marathon_api::{EventKind, HistoryEntry, Item, NextItem, Subtitle};
+use marathon_api::{Direction, EventKind, HistoryEntry, Item, NextItem, Subtitle};
 
 use super::*;
 
@@ -209,6 +211,8 @@ impl Api for FakeApi {
 /// Records commands; position, duration, and pause state are set by tests.
 struct MockPlayer {
     journal: Journal,
+    /// Item IDs whose loads fail.
+    broken: Rc<RefCell<HashSet<String>>>,
     position_ms: Rc<Cell<Option<u64>>>,
     duration_ms: Rc<Cell<Option<u64>>>,
     paused: bool,
@@ -217,6 +221,10 @@ struct MockPlayer {
 impl Player for MockPlayer {
     fn load(&mut self, request: &LoadRequest) -> Result<(), PlayerError> {
         self.journal.borrow_mut().push(Entry::Load(request.clone()));
+        if self.broken.borrow().iter().any(|id| request.url == url(id)) {
+            self.position_ms.set(None);
+            return Err(PlayerError("no such file".into()));
+        }
         self.paused = false;
         self.position_ms.set(Some(request.start_ms));
         Ok(())
@@ -266,6 +274,8 @@ struct Harness {
     journal: Journal,
     position: Rc<Cell<Option<u64>>>,
     clock: Rc<Cell<Instant>>,
+    broken: Rc<RefCell<HashSet<String>>>,
+    events: Arc<Mutex<Vec<Event>>>,
 }
 
 impl Harness {
@@ -290,8 +300,11 @@ impl Harness {
         let journal = Journal::default();
         let position = Rc::new(Cell::new(None));
         let clock = Rc::new(Cell::new(Instant::now()));
+        let broken = Rc::new(RefCell::new(HashSet::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
         let player = MockPlayer {
             journal: journal.clone(),
+            broken: broken.clone(),
             position_ms: position.clone(),
             duration_ms: Rc::new(Cell::new(Some(20 * MIN))),
             paused: false,
@@ -304,12 +317,17 @@ impl Harness {
             client_id: Some("me".into()),
             ..TunerConfig::default()
         };
+        let sink = events.clone();
+        let tuner = Tuner::new(api, player, TestClock(clock.clone()), config)
+            .with_event_sink(move |e| sink.lock().unwrap().push(e));
         Self {
-            tuner: Tuner::new(api, player, TestClock(clock.clone()), config),
+            tuner,
             server,
             journal,
             position,
             clock,
+            broken,
+            events,
         }
     }
 
@@ -328,6 +346,11 @@ impl Harness {
 
     fn advance_clock(&self, by: Duration) {
         self.clock.set(self.clock.get() + by);
+    }
+
+    /// Takes the events emitted so far.
+    fn take_events(&self) -> Vec<Event> {
+        std::mem::take(&mut *self.events.lock().unwrap())
     }
 
     /// Takes the journal so far.
@@ -613,7 +636,7 @@ fn seeking_back_is_respected_even_inside_the_rewind() {
     let mut h = Harness::new(1, 2);
     h.set_saved("c1", 0, 10 * MIN);
     h.tuner.start(Some(1)).unwrap();
-    h.action(Action::SeekRelative(-10));
+    h.action(Action::SeekRelative { seconds: -10 });
     h.action(Action::Quit);
     assert_eq!(h.saved("c1").1, 10 * MIN - 15_000);
 }
@@ -686,15 +709,18 @@ fn channel_up_and_down_wrap_and_skip_empty_channels() {
 fn go_to_channel_by_number() {
     let mut h = Harness::new(3, 2);
     h.tuner.start(Some(1)).unwrap();
-    h.action(Action::GoToChannel(3));
+    h.action(Action::GoToChannel { number: 3 });
     assert_eq!(h.tuner.now().unwrap().channel_id, "c3");
     h.take();
     // Same channel: nothing happens.
-    h.action(Action::GoToChannel(3));
+    h.action(Action::GoToChannel { number: 3 });
     assert_eq!(h.take(), vec![]);
     // Unknown channel: refreshes the list, then reports the error.
-    let err = h.tuner.handle_action(Action::GoToChannel(9)).unwrap_err();
-    assert!(matches!(err, TunerError::NoSuchChannel(9)));
+    let err = h
+        .tuner
+        .handle_action(Action::GoToChannel { number: 9 })
+        .unwrap_err();
+    assert!(matches!(err, TunerError::NoSuchChannel(ref n) if n == "9"));
     assert_eq!(h.take(), vec![Entry::Channels]);
     assert_eq!(h.tuner.now().unwrap().channel_id, "c3");
 }
@@ -777,4 +803,257 @@ fn describe_and_format() {
     assert_eq!(describe(&now), "The Office · S03E14 · The Injury");
     assert_eq!(format_ms(65_000), "1:05");
     assert_eq!(format_ms(3_725_000), "1:02:05");
+}
+
+fn errors(events: &[Event]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Error { message } => Some(message.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn advances(entries: &[Entry], reason: AdvanceReason) -> usize {
+    entries
+        .iter()
+        .filter(|e| matches!(e, Entry::Advance(_, _, r) if *r == reason))
+        .count()
+}
+
+#[test]
+fn an_item_that_fails_to_load_is_skipped_with_an_error_event() {
+    let mut h = Harness::new(1, 4);
+    h.broken.borrow_mut().insert("c1-0".into());
+    h.tuner.start(Some(1)).unwrap();
+    let entries = h.take();
+    assert!(entries.contains(&Entry::Advance(
+        "c1".into(),
+        "c1-0".into(),
+        AdvanceReason::Skipped
+    )));
+    assert_eq!(entries.last(), Some(&load("c1-1", 0)));
+    assert_eq!(h.playing_item(), "c1-1");
+    let events = h.take_events();
+    let errs = errors(&events);
+    assert_eq!(errs.len(), 1);
+    assert!(errs[0].contains("c1-0.mkv"), "{}", errs[0]);
+    assert!(matches!(
+        events.last(),
+        Some(Event::NowPlaying { item_id, .. }) if item_id == "c1-1"
+    ));
+}
+
+#[test]
+fn an_item_that_fails_while_playing_is_skipped() {
+    let mut h = Harness::new(1, 4);
+    h.tuner.start(Some(1)).unwrap();
+    h.take();
+    h.take_events();
+    // e.g. the file was deleted: mpv opens the stream, then gets a 404.
+    h.tuner
+        .handle_player_event(PlayerEvent::Failed("HTTP 404".into()))
+        .unwrap();
+    let entries = h.take();
+    assert_eq!(advances(&entries, AdvanceReason::Skipped), 1);
+    assert_eq!(h.playing_item(), "c1-1");
+    assert_eq!(errors(&h.take_events()).len(), 1);
+}
+
+#[test]
+fn stops_retrying_after_too_many_failures_in_a_row() {
+    let mut h = Harness::new(1, 8);
+    for i in 0..8 {
+        h.broken.borrow_mut().insert(format!("c1-{i}"));
+    }
+    h.tuner.start(Some(1)).unwrap(); // does not loop forever, does not error
+    let entries = h.take();
+    let loads = entries
+        .iter()
+        .filter(|e| matches!(e, Entry::Load(_)))
+        .count();
+    assert_eq!(loads, 5, "default max_consecutive_failures");
+    assert_eq!(advances(&entries, AdvanceReason::Skipped), 4);
+    assert_eq!(entries.last(), Some(&Entry::Stop));
+    let events = h.take_events();
+    let errs = errors(&events);
+    assert_eq!(errs.len(), 6, "{errs:?}");
+    assert!(errs[5].contains("stopped trying"), "{}", errs[5]);
+
+    // Nothing else happens on its own...
+    h.advance_clock(Duration::from_secs(60));
+    h.tuner.tick();
+    assert!(h.take().iter().all(|e| !matches!(e, Entry::Load(_))));
+    // ...but the viewer can try again, with a fresh set of retries.
+    h.broken.borrow_mut().clear();
+    h.action(Action::NextItem);
+    assert!(matches!(h.take().last(), Some(Entry::Load(_))));
+}
+
+#[test]
+fn a_started_item_ends_the_failure_streak() {
+    let mut h = Harness::new(1, 10);
+    let config_max = TunerConfig::default().max_consecutive_failures;
+    // Four bad items, a good one, then four more bad: never gives up.
+    for i in [0, 1, 2, 3, 5, 6, 7, 8] {
+        h.broken.borrow_mut().insert(format!("c1-{i}"));
+    }
+    h.tuner.start(Some(1)).unwrap();
+    assert_eq!(h.playing_item(), "c1-4");
+    h.tuner.handle_player_event(PlayerEvent::Started).unwrap();
+    h.tuner.handle_player_event(PlayerEvent::Ended).unwrap();
+    assert_eq!(h.playing_item(), "c1-9");
+    let errs = h.take_events();
+    assert_eq!(errors(&errs).len(), 8);
+    assert!(errors(&errs).iter().all(|m| !m.contains("stopped trying")));
+    assert_eq!(config_max, 5);
+}
+
+#[test]
+fn unsupported_actions_are_ignored() {
+    let mut h = Harness::new(1, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.take();
+    for action in [Action::Standby, Action::Wake, Action::ToggleFullscreen] {
+        assert_eq!(h.action(action.clone()), Flow::Continue, "{action:?}");
+    }
+    assert_eq!(h.take(), vec![]);
+    assert_eq!(h.playing_item(), "c1-0");
+}
+
+#[test]
+fn actions_before_anything_plays_do_not_panic() {
+    let mut h = Harness::new(2, 2);
+    for action in [
+        Action::TogglePause,
+        Action::Play,
+        Action::Pause,
+        Action::SeekRelative { seconds: 10 },
+        Action::NextItem,
+        Action::PreviousItem,
+        Action::Select,
+        Action::Back,
+        Action::ShowInfo,
+        Action::ToggleSubtitles,
+        Action::Navigate {
+            direction: Direction::Left,
+        },
+    ] {
+        h.tuner.handle_action(action).unwrap();
+    }
+    assert_eq!(h.tuner.state(), &State::Idle);
+}
+
+#[test]
+fn navigate_without_the_guide_changes_channel_and_seeks() {
+    let mut h = Harness::new(3, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.take();
+    let nav = |direction| Action::Navigate { direction };
+    h.action(nav(Direction::Up));
+    assert_eq!(h.tuner.now().unwrap().channel_number, 2);
+    h.action(nav(Direction::Down));
+    assert_eq!(h.tuner.now().unwrap().channel_number, 1);
+    h.take();
+    h.action(nav(Direction::Right));
+    h.action(nav(Direction::Left));
+    assert_eq!(h.take(), vec![Entry::Seek(10), Entry::Seek(-10)]);
+}
+
+#[test]
+fn navigate_with_the_guide_moves_the_selection_and_select_tunes() {
+    let mut h = Harness::new(3, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.action(Action::ToggleGuide);
+    assert!(h.tuner.navigation().guide_open());
+    h.take();
+
+    let nav = |direction| Action::Navigate { direction };
+    h.action(nav(Direction::Down));
+    h.action(nav(Direction::Down));
+    h.action(nav(Direction::Left));
+    // Moving the highlight neither tunes nor seeks.
+    assert_eq!(h.take(), vec![]);
+    assert_eq!(h.tuner.now().unwrap().channel_number, 1);
+    assert_eq!(h.tuner.navigation().highlighted(), Some(2));
+
+    h.action(Action::Select);
+    assert_eq!(h.tuner.now().unwrap().channel_id, "c3");
+    assert!(!h.tuner.navigation().guide_open());
+
+    // Back closes the guide; arrows change channel again.
+    h.action(Action::ToggleGuide);
+    h.action(Action::Back);
+    h.action(nav(Direction::Up));
+    assert_eq!(h.tuner.now().unwrap().channel_number, 1);
+}
+
+#[test]
+fn select_with_nothing_open_shows_info() {
+    let mut h = Harness::new(1, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.take();
+    h.action(Action::Select);
+    assert_eq!(h.take(), vec![], "info is logged, nothing else");
+}
+
+#[test]
+fn go_to_channel_by_id() {
+    let mut h = Harness::new(3, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.action(Action::GoToChannelId { id: "c2".into() });
+    assert_eq!(h.tuner.now().unwrap().channel_number, 2);
+    let err = h
+        .tuner
+        .handle_action(Action::GoToChannelId { id: "nope".into() })
+        .unwrap_err();
+    assert!(matches!(err, TunerError::NoSuchChannel(ref n) if n == "nope"));
+}
+
+#[test]
+fn play_and_pause_are_idempotent_and_emit_events() {
+    let mut h = Harness::new(1, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.position.set(Some(MIN));
+    h.take();
+    h.take_events();
+
+    h.action(Action::Play); // already playing
+    assert_eq!(h.take(), vec![]);
+    h.action(Action::Pause);
+    h.action(Action::Pause);
+    let entries = h.take();
+    assert_eq!(entries[0], Entry::Pause(true));
+    assert_eq!(Harness::progress_reports(&entries).len(), 1);
+    h.action(Action::Play);
+    assert_eq!(h.take()[0], Entry::Pause(false));
+    let paused = |e: &Event| matches!(e, Event::Paused { position_ms, .. } if *position_ms == MIN);
+    let resumed = |e: &Event| matches!(e, Event::Resumed { .. });
+    let events = h.take_events();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(paused(&events[0]) && resumed(&events[1]));
+}
+
+#[test]
+fn tuning_and_advancing_emit_events() {
+    let mut h = Harness::new(2, 3);
+    h.tuner.start(Some(1)).unwrap();
+    let events = h.take_events();
+    assert!(matches!(
+        &events[..],
+        [
+            Event::ChannelChanged { channel_id, .. },
+            Event::NowPlaying { item_id, .. },
+        ] if channel_id == "c1" && item_id == "c1-0"
+    ));
+    h.tuner.handle_player_event(PlayerEvent::Ended).unwrap();
+    let events = h.take_events();
+    assert!(matches!(
+        &events[..],
+        [
+            Event::ItemEnded { item_id: ended, .. },
+            Event::NowPlaying { item_id: next, .. },
+        ] if ended == "c1-0" && next == "c1-1"
+    ));
 }
