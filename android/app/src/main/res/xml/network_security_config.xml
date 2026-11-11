@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- marathond speaks plain HTTP on the LAN or over the user's VPN
+     (PLAN.md §2: remote access is the VPN's job), at an address the user
+     types in, so cleartext has to be allowed. -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration" />
+</network-security-config>

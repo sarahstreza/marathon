@@ -25,7 +25,7 @@ server on Android via `cargo-ndk` is listed after the MVP.
 | compileSdk / targetSdk | 37 | |
 | minSdk | 26 | The libmpv AAR's own minimum |
 | libmpv | `dev.jdtech.mpv:libmpv` 1.0.0 (Maven Central, April 2026) | mpv-android's native libraries for all four ABIs plus a small `MPVLib` JNI wrapper. MIT wrapper; the bundled mpv/FFmpeg are GPL (see Licensing) |
-| Compose for TV | `androidx.tv:tv-material` 1.1.0 | Only used for TV-specific surfaces. Everything else is plain Compose Material 3 |
+| Compose | BOM 2026.09, Material 3 | One UI for phones and TVs; see "Why not Compose for TV" below |
 
 Every version lives in `android/gradle/libs.versions.toml`. Check the current
 release before bumping one, as CLAUDE.md asks for Rust crates.
@@ -152,14 +152,16 @@ makes "passes the same scenarios as the Rust version" checkable by machine.
 - Video draws into a `SurfaceView` hosted by Compose (`AndroidView`). It is
   attached with `attachSurface`, and detached when the surface is destroyed.
 - `MPVLib`'s event callback passes only the event ID, not `end-file`'s
-  reason. So:
-  - `FILE_LOADED` → `PlayerEvent.Started`.
-  - `eof-reached` becoming true → `PlayerEvent.Ended`.
-  - `END_FILE` after a `START_FILE` but before its `FILE_LOADED` →
-    `PlayerEvent.Failed` (the file couldn't be opened).
-  - An `END_FILE` for a file that had loaded is a replace or stop, so it's
-    ignored. That honours the `Player` contract that `Ended`/`Failed` only ever
-    refer to the latest file loaded.
+  reason or playlist entry. So the latest load's fate is read from
+  properties instead:
+  - `FILE_LOADED` while mpv's `path` is the URL last loaded → `Started`.
+  - `eof-reached` becoming true (with `keep-open`) → `Ended`.
+  - `idle-active` becoming true while the latest load is pending or
+    playing → `Failed`. mpv only goes idle when a file couldn't be opened,
+    broke mid-play, or was stopped. Replacing a file never goes idle.
+  - Events for replaced files are ignored. That honours the `Player`
+    contract that `Ended`/`Failed` only ever refer to the latest file
+    loaded, even when channel flipping replaces a file before mpv starts it.
 - Position, duration, and pause state are cached from observed properties, so
   `positionMs()` never blocks on mpv.
 - Sidecar subtitles are added with `sub-add <url> auto <title> <lang>` after
@@ -174,8 +176,8 @@ makes "passes the same scenarios as the Rust version" checkable by machine.
 One `ComponentActivity`, fullscreen and immersive, with the screen kept on
 while it is in front.
 
-- **Setup screen:** server URL and optional token, stored in `SharedPreferences`,
-  with a Test button that calls `/health`. It shows on first launch, or when the
+- **Setup screen:** server URL and optional token, stored in private
+  `SharedPreferences`, with a Test button that calls `/health`. It shows on first launch, or when the
   server can't be reached at start. Discovery (mDNS) is listed after the MVP.
 - **Watch screen:** the video, with the overlay on top:
   - **Channel banner:** number, name, `S03E14 · Title`, and a progress bar. It
@@ -186,8 +188,18 @@ while it is in front.
     Tuner's highlight. It is driven entirely by `UiEvent`s, as on desktop, so
     the remote, keys, touch, and the HTTP API all move the same highlight.
   - Text is sized to be readable from across a room on a TV and from arm's
-    length on a phone. On a TV, Compose for TV's surfaces give the focus
-    treatment.
+    length on a phone. Like the desktop, the overlay lays out in "points"
+    that are 1/540 of the screen's height.
+  - Error messages (`Event::Error`, unreachable server) show as a toast for
+    6 s, as on desktop.
+
+**Why not Compose for TV.** PLAN.md names Compose for TV (`androidx.tv`)
+for the 10-foot UI. Its value is D-pad focus handling for interactive
+TV screens. Marathon's overlay is display-only, like the desktop's egui
+overlay: every key becomes an `Action` at the activity level, and the
+Tuner moves the guide's highlight. So there's no focus to manage, and
+plain Compose draws the same overlay on phones and TVs. The only focusable
+screen is Setup, where standard Compose text fields work with a D-pad.
 
 ### Keys → `Action` (`KeyMapping`, unit tested)
 
@@ -205,8 +217,10 @@ while it is in front.
 | Info, I, Menu | `ShowInfo` |
 | Guide, G | `ToggleGuide` |
 | Captions, S | `ToggleSubtitles` |
+| Game controller | As on desktop: A select, B back, shoulders channel, triggers next/previous item, Start pause, Y guide, X subtitles, Select info |
 
-Only seeking repeats when held, as on desktop. Colour buttons are left unmapped.
+Only seeking repeats when held, as on desktop. Colour buttons are left
+unmapped, and keys Marathon doesn't use (volume, Home) go to the system.
 
 ### Touch → `Action` (phone)
 
@@ -214,10 +228,14 @@ Only seeking repeats when held, as on desktop. Colour buttons are left unmapped.
 |---|---|
 | Swipe up / down | `ChannelUp` / `ChannelDown` |
 | Double-tap right / left third | `SeekRelative(+10)` / `SeekRelative(-10)` |
+| Double-tap the middle | `TogglePause` |
 | Single tap | `ShowInfo`, and reveals a control strip for 4 s |
-| Control strip | Guide, previous item, pause/play, next item, subtitles |
-| Tap a guide row | `GoToChannelId` |
-| System back | `Back` (closes the guide, then the banner, then leaves the app) |
+| Control strip | Guide, previous item, pause/play, next item, subtitles, server settings |
+| System back | Clears a half-typed channel number, then `Back` (closes the guide or banner), then leaves the app |
+
+Back reaches apps through the back dispatcher, not `onKeyDown` (the
+default from Android 16), so `MainActivity` handles it with an
+`OnBackPressedCallback`.
 
 Together with the remote API, this covers every §9 action that means anything on
 Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
