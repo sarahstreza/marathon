@@ -3,7 +3,8 @@
 Marathon works like a TV. Each channel picks up where you left it, and
 when an episode ends the next one starts on its own. Most of the time
 you'll just flip channels and let it play. This page covers everything
-else you can do, with a keyboard, a mouse, or a game controller.
+else you can do, with a keyboard, a mouse, a game controller, or the
+TV's own remote.
 
 All three work at the same time, and none of them takes priority:
 whatever you pressed last wins. The same goes for programs controlling
@@ -136,6 +137,67 @@ Press **Q** (controller: the Home / Xbox / PS button), or close the
 window. Marathon saves where you were on the current channel and will
 start there next time. To start on a particular channel instead, run it
 with `--channel N`.
+
+## The TV's remote (HDMI-CEC)
+
+If Marathon's computer is plugged into the TV and both support HDMI-CEC
+(most TVs do, under a brand name like Anynet+, Bravia Sync, SimpLink, or
+just "HDMI control"), the TV's own remote can control Marathon. Marathon
+shows up in the TV's list of inputs as **Marathon**.
+
+This needs a build with CEC support (`--features input-cec`) and the
+`--cec` option. It also needs a way onto the CEC bus: a Raspberry Pi has
+one built in, and most PCs need a Pulse-Eight USB-CEC adapter between
+the computer and the TV.
+
+| To… | TV remote |
+|---|---|
+| Change channel | Channel + / −, or ▲ / ▼ |
+| Go to a channel by number | Type the number (then OK, or wait) |
+| See what's on | Info (or OK) |
+| Open or close the guide | Guide, Menu, or Channel list |
+| Skip back or forward 10 seconds | ◀ / ▶ (hold to keep going), or ⏪ / ⏩ |
+| Pause or resume | ⏯, ▶ (play), ⏸ (pause); ⏹ (stop) pauses too |
+| Next / previous episode | ⏭ / ⏮ |
+| Close the guide or hide the banner | Back, Return, or Exit |
+
+Which buttons a TV passes on varies by make. The arrows, OK, and Back
+nearly always work; Info and Guide often don't. In the guide, the arrows
+and OK work just like the keyboard's.
+
+The colour buttons do nothing unless you choose something for them, for
+example `--cec-button red=toggle_subtitles --cec-button
+blue=toggle_guide`. Any action from [REMOTE.md](REMOTE.md) works, by name
+or as JSON.
+
+**Switching inputs.** Marathon is meant to be a polite guest on your TV:
+
+- Turning the TV on never switches it to Marathon. It stays on whatever
+  input it was on.
+- When you switch the TV to another input, or turn the TV off, Marathon
+  pauses and saves its place. When you switch back to Marathon, it
+  carries on (start it with `--cec-no-resume` to have it wait for you to
+  press play instead).
+- Marathon never turns the TV on or off. The one exception is
+  `--cec-claim-on-start`, which makes the TV switch to Marathon (turning
+  it on if it's in standby) when Marathon starts.
+
+If the adapter isn't plugged in when Marathon starts, or gets unplugged,
+Marathon keeps playing and tries again every few seconds. Everything
+else keeps working in the meantime.
+
+**If the remote does nothing:**
+
+- On Linux, Marathon needs permission to use the adapter: `/dev/cec0`
+  (built-in CEC, usually group `video`) or `/dev/ttyACM0` (a Pulse-Eight,
+  usually group `dialout`). Marathon logs `no permission to use the CEC
+  adapter` if that's the problem.
+- Check that HDMI-CEC is switched on in the TV's settings.
+- Some adapters can't tell which HDMI input they're plugged into. Tell
+  Marathon with `--cec-hdmi-port N`.
+- If there are several adapters, pick one with `--cec-adapter PATH`.
+- Run with `RUST_LOG=info,libcec=debug` to see what's happening on the
+  CEC bus.
 
 ## Game controllers
 
