@@ -78,9 +78,10 @@ pub enum Action {
     ToggleSubtitles,
     /// Switch between fullscreen and windowed.
     ToggleFullscreen,
-    /// Go quiet: stop playback and blank the screen, ready to wake.
+    /// Go quiet (e.g. the TV switched to another input): pause, save the
+    /// position, and hide the overlay, ready to wake.
     Standby,
-    /// Come back from standby.
+    /// Come back from standby, resuming playback if standby paused it.
     Wake,
     /// Save the position and exit.
     Quit,

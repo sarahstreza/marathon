@@ -33,6 +33,9 @@
 //!   banner, the guide) is published as [`UiEvent`]s through the sink set
 //!   with [`Tuner::with_ui_sink`]. A channel switch announces itself
 //!   before any network call, so the banner can appear instantly.
+//! - Standby (PLAN.md M7): [`Action::Standby`] pauses and reports progress,
+//!   and [`Action::Wake`] resumes, but only if standby was what paused it.
+//!   Anything that starts playback (play, tune, skip) also ends standby.
 //! - "Keeps going": an item that fails to load or play is skipped with an
 //!   [`Event::Error`]. After [`TunerConfig::max_consecutive_failures`]
 //!   failures in a row the tuner stops retrying and says so, rather than
@@ -181,6 +184,9 @@ pub struct Tuner<A, P, C = SystemClock> {
     ui: UiSink,
     /// Items in a row that failed to load or play.
     failures: u32,
+    /// In standby: whether waking should resume playback (it was playing
+    /// when standby began). `None` when not in standby.
+    standby: Option<bool>,
 }
 
 impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
@@ -196,6 +202,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             events: Box::new(|event| tracing::debug!(?event, "event")),
             ui: Box::new(|cue| tracing::debug!(?cue, "ui")),
             failures: 0,
+            standby: None,
         }
     }
 
@@ -239,6 +246,11 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
 
     pub fn player_mut(&mut self) -> &mut P {
         &mut self.player
+    }
+
+    /// Whether the client is in standby.
+    pub fn in_standby(&self) -> bool {
+        self.standby.is_some()
     }
 
     fn emit(&mut self, event: Event) {
@@ -405,9 +417,8 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             Action::ToggleSubtitles => self.player.toggle_subtitles(),
             // Window business, routed there by the app; nothing to do here.
             Action::ToggleFullscreen => {}
-            Action::Standby | Action::Wake => {
-                tracing::info!(?action, "not supported yet; ignoring");
-            }
+            Action::Standby => self.enter_standby(),
+            Action::Wake => self.wake(),
             Action::Quit => {
                 self.report_progress();
                 self.player.stop();
@@ -495,13 +506,59 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         }
     }
 
+    /// Goes quiet (the TV switched away or went to standby): pauses,
+    /// reports progress, and hides the overlay. Remembers whether it was
+    /// playing, so [`Tuner::wake`] resumes only what standby paused.
+    fn enter_standby(&mut self) {
+        if self.standby.is_some() {
+            return;
+        }
+        let was_playing = matches!(self.state, State::Playing(_)) && !self.player.is_paused();
+        tracing::info!(was_playing, "standby");
+        if was_playing {
+            self.set_paused(true);
+        } else {
+            self.report_progress();
+        }
+        self.standby = Some(was_playing);
+        self.emit(Event::Standby);
+        if self.navigation.close() {
+            self.cue_guide();
+        }
+        self.cue(UiEvent::Hide);
+    }
+
+    /// Comes back from standby, resuming playback if standby paused it.
+    fn wake(&mut self) {
+        let Some(resume) = self.standby.take() else {
+            return;
+        };
+        tracing::info!(resume, "wake");
+        self.emit(Event::Wake);
+        if resume {
+            self.set_paused(false);
+        }
+    }
+
+    /// Something started playback while in standby (the viewer pressed
+    /// play, tuned, or skipped): standby is over.
+    fn leave_standby(&mut self) {
+        if self.standby.take().is_some() {
+            tracing::info!("playback resumed; leaving standby");
+            self.emit(Event::Wake);
+        }
+    }
+
     fn set_paused(&mut self, paused: bool) {
+        if !matches!(self.state, State::Playing(_)) || self.player.is_paused() == paused {
+            return;
+        }
+        if !paused {
+            self.leave_standby();
+        }
         let State::Playing(playing) = &self.state else {
             return;
         };
-        if self.player.is_paused() == paused {
-            return;
-        }
         let (channel_id, item_id) = (playing.now.channel_id.clone(), playing.now.item.id.clone());
         self.player.set_paused(paused);
         tracing::info!(paused, "pause");
@@ -600,6 +657,8 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             }));
             match loaded {
                 Ok(()) => {
+                    // A load starts playback, which ends standby.
+                    self.leave_standby();
                     self.emit(event);
                     self.cue_current(announce);
                     return Ok(());
