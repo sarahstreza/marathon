@@ -8,6 +8,7 @@
 //! - [`bus`], [`input`]: the action bus and the
 //!   [`InputSource`](input::InputSource) adapters that feed it.
 //! - [`navigation`]: resolving `Navigate`/`Select`/`Back` by context.
+//! - [`ui`]: the cues the tuner gives the on-screen overlay.
 //! - [`keyboard`] (feature `input-keyboard`): keyboard bindings.
 //! - [`client_id`]: the per-installation client ID.
 //!
@@ -26,3 +27,4 @@ pub mod keyboard;
 pub mod navigation;
 pub mod player;
 pub mod tuner;
+pub mod ui;

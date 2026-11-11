@@ -29,6 +29,10 @@
 //! - PLAN.md §9: context-dependent actions (`Navigate`, `Select`, `Back`)
 //!   are resolved by [`Navigation`]; what happens is published as
 //!   [`Event`]s through the sink set with [`Tuner::with_event_sink`].
+//! - PLAN.md §9 "Overlay UI": what the screen should show (the channel
+//!   banner, the guide) is published as [`UiEvent`]s through the sink set
+//!   with [`Tuner::with_ui_sink`]. A channel switch announces itself
+//!   before any network call, so the banner can appear instantly.
 //! - "Keeps going": an item that fails to load or play is skipped with an
 //!   [`Event::Error`]. After [`TunerConfig::max_consecutive_failures`]
 //!   failures in a row the tuner stops retrying and says so, rather than
@@ -44,6 +48,7 @@ use marathon_api::{
 use crate::api::{Api, ApiError};
 use crate::navigation::{Navigation, Resolved};
 use crate::player::{LoadRequest, Player, PlayerError, PlayerEvent, SubtitleTrack};
+use crate::ui::{Banner, Guide, UiEvent};
 
 /// Tuning knobs. [`TunerConfig::default`] has the values from PLAN.md §12.
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +165,9 @@ pub struct Playing {
 /// Receives the tuner's [`Event`]s.
 pub type EventSink = Box<dyn FnMut(Event) + Send>;
 
+/// Receives the tuner's [`UiEvent`]s.
+pub type UiSink = Box<dyn FnMut(UiEvent) + Send>;
+
 /// The Tuner state machine. See the module docs.
 pub struct Tuner<A, P, C = SystemClock> {
     api: A,
@@ -170,6 +178,7 @@ pub struct Tuner<A, P, C = SystemClock> {
     state: State,
     navigation: Navigation,
     events: EventSink,
+    ui: UiSink,
     /// Items in a row that failed to load or play.
     failures: u32,
 }
@@ -185,6 +194,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             state: State::Idle,
             navigation: Navigation::default(),
             events: Box::new(|event| tracing::debug!(?event, "event")),
+            ui: Box::new(|cue| tracing::debug!(?cue, "ui")),
             failures: 0,
         }
     }
@@ -192,6 +202,12 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
     /// Sends the tuner's events to `sink` instead of the debug log.
     pub fn with_event_sink(mut self, sink: impl FnMut(Event) + Send + 'static) -> Self {
         self.events = Box::new(sink);
+        self
+    }
+
+    /// Sends the tuner's overlay cues to `sink` instead of the debug log.
+    pub fn with_ui_sink(mut self, sink: impl FnMut(UiEvent) + Send + 'static) -> Self {
+        self.ui = Box::new(sink);
         self
     }
 
@@ -227,6 +243,33 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
 
     fn emit(&mut self, event: Event) {
         (self.events)(event);
+    }
+
+    fn cue(&mut self, cue: UiEvent) {
+        (self.ui)(cue);
+    }
+
+    /// Tells the overlay what is on now (e.g. after a switch failed, so the
+    /// banner does not keep naming a channel that never tuned in).
+    fn cue_current(&mut self, announce: bool) {
+        let cue = match self.now() {
+            Some(now) => UiEvent::Playing {
+                banner: Banner::from_now(now),
+                announce,
+            },
+            None => UiEvent::Stopped,
+        };
+        self.cue(cue);
+    }
+
+    /// Tells the overlay the guide's state: its rows and highlight, or
+    /// that it is closed.
+    fn cue_guide(&mut self) {
+        let guide = self.navigation.highlighted().map(|highlighted| {
+            let current = self.now().map(|n| n.channel_id.as_str());
+            Guide::new(&self.channels, highlighted, current)
+        });
+        self.cue(UiEvent::Guide(guide));
     }
 
     /// Fetches the channel list and tunes the first channel: channel
@@ -317,23 +360,37 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             Action::Navigate { direction } => {
                 match self.navigation.navigate(direction, &self.channels) {
                     Resolved::Action(action) => return self.handle_action(action),
-                    Resolved::GuideMoved => self.log_guide(),
+                    Resolved::GuideMoved => self.cue_guide(),
                     Resolved::Nothing => {}
                 }
             }
-            Action::Select => match self.navigation.select(&self.channels) {
-                Resolved::Action(action) => return self.handle_action(action),
-                Resolved::GuideMoved | Resolved::Nothing => {}
-            },
-            Action::Back => {
-                if self.navigation.close() {
-                    tracing::info!("guide closed");
+            Action::Select => {
+                let guide_was_open = self.navigation.guide_open();
+                let resolved = self.navigation.select(&self.channels);
+                if guide_was_open {
+                    // Selecting closes the guide, before any tuning.
+                    self.cue_guide();
+                }
+                match resolved {
+                    Resolved::Action(action) => return self.handle_action(action),
+                    Resolved::GuideMoved | Resolved::Nothing => {}
                 }
             }
-            Action::ShowInfo => self.log_info(),
+            Action::Back => {
+                if self.navigation.close() {
+                    tracing::debug!("guide closed");
+                    self.cue_guide();
+                } else {
+                    self.cue(UiEvent::Hide);
+                }
+            }
+            Action::ShowInfo => {
+                self.log_info();
+                self.cue(UiEvent::ShowInfo);
+            }
             Action::ToggleGuide => {
                 if self.navigation.close() {
-                    tracing::info!("guide closed");
+                    tracing::debug!("guide closed");
                 } else {
                     if let Err(err) = self.refresh_channels() {
                         tracing::warn!(%err, "cannot refresh channels");
@@ -341,8 +398,9 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                     let current = self.now().map(|n| n.channel_id.clone());
                     self.navigation
                         .open_guide(&self.channels, current.as_deref());
-                    self.log_guide();
+                    tracing::debug!("guide opened");
                 }
+                self.cue_guide();
             }
             Action::ToggleSubtitles => self.player.toggle_subtitles(),
             // Window business, routed there by the app; nothing to do here.
@@ -368,7 +426,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             }
             PlayerEvent::Ended => self.advance_on_end(),
             PlayerEvent::Failed(reason) => match self.after_failure(&reason)? {
-                Some(next) => self.play(next),
+                Some(next) => self.play(next, false),
                 None => Ok(()),
             },
         }
@@ -469,7 +527,19 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
     /// of resuming. On failure to reach the server, whatever was playing
     /// keeps playing.
     fn tune(&mut self, channel_id: &str) -> Result<(), TunerError> {
+        // Announce the switch before anything that waits on the network.
+        if let Some(channel) = self.channels.iter().find(|c| c.id == channel_id) {
+            self.cue(UiEvent::Tuning(Banner::from_summary(channel)));
+        }
         self.report_progress();
+        let result = self.tune_inner(channel_id);
+        if result.is_err() {
+            self.cue_current(true);
+        }
+        result
+    }
+
+    fn tune_inner(&mut self, channel_id: &str) -> Result<(), TunerError> {
         let mut now = self.api.now(channel_id)?;
         if self
             .config
@@ -502,12 +572,13 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
         });
         // A fresh choice by the viewer gets a fresh set of retries.
         self.failures = 0;
-        self.play(now)
+        self.play(now, true)
     }
 
     /// Loads `now` into the player, resuming with the rewind. If the player
     /// cannot load it, skips ahead (see [`Tuner::after_failure`]).
-    fn play(&mut self, mut now: Now) -> Result<(), TunerError> {
+    /// `announce` says whether the overlay should show the banner for it.
+    fn play(&mut self, mut now: Now, announce: bool) -> Result<(), TunerError> {
         loop {
             let start_ms = self.config.resume_at(now.position_ms);
             let loaded = self.player.load(&LoadRequest {
@@ -530,6 +601,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             match loaded {
                 Ok(()) => {
                     self.emit(event);
+                    self.cue_current(announce);
                     return Ok(());
                 }
                 Err(err) => match self.after_failure(&err.to_string())? {
@@ -568,6 +640,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             tracing::error!(%message);
             self.emit(Event::Error { message });
             self.player.stop();
+            self.cue(UiEvent::Stopped);
             return Ok(None);
         }
         let next = self.api.advance(
@@ -671,9 +744,10 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 resume_floor: None,
                 last_report: self.clock.now(),
             }));
+            self.cue_current(false);
             Ok(())
         } else {
-            self.play(now)
+            self.play(now, false)
         }
     }
 
@@ -703,7 +777,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             "skipped"
         );
         self.failures = 0;
-        self.play(now)
+        self.play(now, true)
     }
 
     /// Tunes `step` channels up or down from the current one, skipping
@@ -769,21 +843,6 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
                 "now playing"
             ),
             None => tracing::info!("nothing playing"),
-        }
-    }
-
-    /// Draws the guide as log lines, marking the highlighted channel. (The
-    /// overlay comes in M5.)
-    fn log_guide(&self) {
-        let highlighted = self.navigation.highlighted();
-        for (i, c) in self.channels.iter().enumerate() {
-            let on = c
-                .current
-                .as_ref()
-                .map(|i| i.title.as_str())
-                .unwrap_or("(nothing)");
-            let marker = if Some(i) == highlighted { ">" } else { " " };
-            tracing::info!("guide {marker} {:>3} {} — {on}", c.number, c.name);
         }
     }
 }

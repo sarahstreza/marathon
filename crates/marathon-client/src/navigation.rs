@@ -8,8 +8,8 @@
 //!   Left/Right do nothing, Select tunes to the highlighted channel and
 //!   closes the guide, Back closes it.
 //!
-//! This is UI state, kept apart from the tuner's playback logic. With no
-//! overlay yet (M5), the guide is drawn as log lines.
+//! This is UI state, kept apart from the tuner's playback logic. The tuner
+//! tells the overlay about it with [`UiEvent::Guide`](crate::ui::UiEvent::Guide).
 
 use marathon_api::{Action, ChannelSummary, Direction};
 
