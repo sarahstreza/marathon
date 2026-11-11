@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 
+use marathon_api::{Action, Event};
 use marathon_server::http::ApiDoc;
 use serde_json::Value;
 use utoipa::OpenApi;
@@ -23,6 +24,10 @@ const ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/subtitles/{item_id}/{n}"),
     ("get", "/api/v1/history"),
     ("post", "/api/v1/library/rescan"),
+    ("get", "/api/v1/clients"),
+    ("get", "/api/v1/clients/connect"),
+    ("post", "/api/v1/clients/{id}/actions"),
+    ("get", "/api/v1/events"),
     ("get", "/api/v1/openapi.json"),
 ];
 
@@ -92,4 +97,65 @@ fn collect_refs(value: &Value, out: &mut Vec<String>) {
         Value::Array(items) => items.iter().for_each(|v| collect_refs(v, out)),
         _ => {}
     }
+}
+
+/// The `oneOf` branch of a tagged enum's schema whose tag property
+/// (`tag`) is the single value `name`.
+fn variant_schema<'a>(doc: &'a Value, schema: &str, tag: &str, name: &str) -> &'a Value {
+    let variants = doc["components"]["schemas"][schema]["oneOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{schema} has no oneOf"));
+    let matching: Vec<_> = variants
+        .iter()
+        .filter(|v| v["properties"][tag]["enum"] == serde_json::json!([name]))
+        .collect();
+    assert_eq!(matching.len(), 1, "{schema} variant {name}");
+    matching[0]
+}
+
+/// Asserts that `value` (an example serialized to JSON) has exactly the
+/// properties the schema variant declares, and all of them required.
+fn assert_shape(variant: &Value, value: &Value, what: &str) {
+    let keys = |v: &Value| -> BTreeSet<String> { v.as_object().unwrap().keys().cloned().collect() };
+    let declared = keys(&variant["properties"]);
+    let required: BTreeSet<String> = variant["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(keys(value), declared, "{what}: properties");
+    assert_eq!(required, declared, "{what}: required");
+}
+
+#[test]
+fn every_action_and_event_appears_with_its_json_shape() {
+    let doc: Value = serde_json::from_str(&document()).unwrap();
+    for action in Action::examples() {
+        let value = serde_json::to_value(&action).unwrap();
+        let variant = variant_schema(&doc, "Action", "action", action.name());
+        assert_shape(variant, &value, action.name());
+    }
+    for event in Event::examples() {
+        let value = serde_json::to_value(&event).unwrap();
+        let variant = variant_schema(&doc, "Event", "event", event.name());
+        assert_shape(variant, &value, event.name());
+    }
+    // Navigate's direction is spelled out.
+    let navigate = variant_schema(&doc, "Action", "action", "navigate");
+    assert_eq!(
+        navigate["properties"]["direction"]["$ref"],
+        "#/components/schemas/Direction"
+    );
+    assert_eq!(
+        doc["components"]["schemas"]["Direction"]["enum"],
+        serde_json::json!(["up", "down", "left", "right"])
+    );
+    // A relayed event is an event plus its envelope.
+    let relayed = &doc["components"]["schemas"]["RelayedEvent"]["allOf"];
+    assert_eq!(relayed[0]["$ref"], "#/components/schemas/Event");
+    assert_eq!(
+        relayed[1]["required"],
+        serde_json::json!(["client_id", "ts_ms"])
+    );
 }

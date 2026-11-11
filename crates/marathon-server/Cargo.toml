@@ -13,7 +13,9 @@ workspace = true
 [dependencies]
 marathon-api.workspace = true
 marathon-rules.workspace = true
-axum.workspace = true
+# `ws` for the client control channel (`/clients/connect`).
+axum = { workspace = true, features = ["ws"] }
+futures-util.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,4 +32,7 @@ uuid.workspace = true
 [dev-dependencies]
 http-body-util.workspace = true
 oas3.workspace = true
+# HTTP and WebSocket clients for the relay tests over a real socket.
+reqwest.workspace = true
 tempfile.workspace = true
+tokio-tungstenite.workspace = true

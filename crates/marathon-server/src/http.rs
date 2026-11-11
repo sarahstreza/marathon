@@ -1,24 +1,31 @@
 //! The HTTP API (PLAN.md §8): routes, handlers, authentication, and the
-//! OpenAPI document.
+//! OpenAPI document. The remote-control routes (`/clients`, `/events`)
+//! are backed by [`crate::relay`].
 
 use std::convert::Infallible;
 use std::path::{Component, Path as FsPath, PathBuf};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{FromRequestParts, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::sse::{self, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::Stream;
 use marathon_api::{
-    API_PREFIX, API_VERSION, AdvanceReason, AdvanceRequest, CLIENT_ID_HEADER, ChannelSummary,
-    ErrorBody, ErrorCode, EventKind, Health, HistoryEntry, Item, NextItem, Now, PreviousRequest,
-    ProgressReport, ScanReport, Subtitle, VersionInfo,
+    API_PREFIX, API_VERSION, Action, ActionAccepted, AdvanceReason, AdvanceRequest,
+    CLIENT_ID_HEADER, ChannelSummary, ClientInfo, ClientPlaying, DEFAULT_CLIENT, Direction,
+    ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item, NextItem, Now,
+    PreviousRequest, ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo,
 };
 use serde::Deserialize;
+use tokio::sync::broadcast::error::RecvError;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 use tower_http::trace::TraceLayer;
@@ -48,6 +55,10 @@ pub fn router(app: App) -> Router {
         .route("/subtitles/{item_id}/{n}", get(subtitle))
         .route("/history", get(history))
         .route("/library/rescan", post(rescan))
+        .route("/clients", get(list_clients))
+        .route("/clients/connect", get(connect))
+        .route("/clients/{id}/actions", post(client_action))
+        .route("/events", get(events))
         .route("/openapi.json", get(openapi));
     Router::new()
         .nest(API_PREFIX, api)
@@ -350,6 +361,159 @@ async fn rescan(State(app): State<App>) -> Result<Json<ScanReport>, ApiError> {
     Ok(Json(app.rescan().await?))
 }
 
+// --- Remote control and events (PLAN.md §9) --------------------------------
+
+#[utoipa::path(get, path = "/api/v1/clients", tag = "control",
+    description = "Clients connected to their control channel, most recently active first, \
+                   with what each is playing.",
+    responses((status = 200, description = "Connected clients", body = Vec<ClientInfo>)))]
+async fn list_clients(State(app): State<App>) -> Json<Vec<ClientInfo>> {
+    Json(app.relay().list())
+}
+
+#[utoipa::path(get, path = "/api/v1/clients/connect", tag = "control",
+    description = "A client's control channel, as a WebSocket. The client must send \
+                   `X-Marathon-Client`. The server sends each relayed `Action` as a JSON text \
+                   message; the client sends each of its `Event`s the same way, and the server \
+                   republishes them on `GET /events`. A client that connects again replaces \
+                   its earlier connection.",
+    params(("X-Marathon-Client" = String, Header, description = "The client's ID")),
+    responses(
+        (status = 101, description = "Switching to the WebSocket protocol"),
+        (status = 400, description = "Not a WebSocket request, or no usable client ID",
+            body = ErrorBody),
+    ))]
+async fn connect(
+    State(app): State<App>,
+    ClientId(client): ClientId,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Result<Response, ApiError> {
+    let upgrade = upgrade.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let client = client.ok_or_else(|| {
+        ApiError::BadRequest(format!(
+            "the control channel needs a {CLIENT_ID_HEADER} header"
+        ))
+    })?;
+    if client == DEFAULT_CLIENT {
+        return Err(ApiError::BadRequest(format!(
+            "{DEFAULT_CLIENT:?} is reserved and cannot be a client ID"
+        )));
+    }
+    Ok(upgrade.on_upgrade(move |socket| control_channel(app, client, socket)))
+}
+
+/// Runs one client's control channel until either side closes it or the
+/// server shuts down.
+async fn control_channel(app: App, client: String, mut socket: WebSocket) {
+    let relay = app.relay();
+    let (connection, mut actions) = relay.connect(&client);
+    let shutdown = relay.shutting_down();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            action = actions.recv() => {
+                // `None`: the client connected again, replacing this
+                // connection.
+                let Some(action) = action else { break };
+                let text = match serde_json::to_string(&action) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        tracing::error!(%err, "cannot serialize an action");
+                        continue;
+                    }
+                };
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => match serde_json::from_str::<Event>(&text) {
+                    Ok(event) => relay.publish(&client, event),
+                    Err(err) => tracing::warn!(
+                        client = %client, %err, "ignoring a malformed event from a client"
+                    ),
+                },
+                // Pings are answered by the WebSocket library.
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+            },
+            () = &mut shutdown => {
+                let _ = socket
+                    .send(Message::Close(Some(CloseFrame {
+                        code: close_code::AWAY,
+                        reason: "server shutting down".into(),
+                    })))
+                    .await;
+                break;
+            }
+        }
+    }
+    relay.disconnect(&client, connection);
+}
+
+#[utoipa::path(post, path = "/api/v1/clients/{id}/actions", tag = "control",
+    description = "Relays an action to a connected client, as if pressed on its remote. \
+                   `id` may be `default`: the most recently active client. The body is \
+                   parsed as JSON whatever its `Content-Type`, so a bare `curl -d` works. \
+                   Delivery is best effort: the action is lost if the client disconnects \
+                   before it is sent.",
+    params(("id" = String, Path, description = "Client ID, or `default`")),
+    request_body = Action,
+    responses(
+        (status = 202, description = "Handed to the client's control channel",
+            body = ActionAccepted),
+        (status = 400, description = "Not a valid action", body = ErrorBody),
+        (status = 404, description = "No such client is connected", body = ErrorBody),
+    ))]
+async fn client_action(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<ActionAccepted>), ApiError> {
+    let action: Action = serde_json::from_slice(&body)
+        .map_err(|err| ApiError::BadRequest(format!("not a valid action: {err}")))?;
+    let client_id = app
+        .relay()
+        .send_action(&id, action)
+        .map_err(|err| ApiError::NotFound(err.to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(ActionAccepted { client_id })))
+}
+
+#[utoipa::path(get, path = "/api/v1/events", tag = "control",
+    description = "Server-Sent Events: every event any connected client publishes, from now \
+                   on. Each message's `event:` field is the event's name (`now_playing`, \
+                   ...) and its `data:` a `RelayedEvent` as JSON. A subscriber that falls far \
+                   behind gets a comment saying how many events it missed.",
+    responses((status = 200, description = "The event stream", body = RelayedEvent,
+        content_type = "text/event-stream")))]
+async fn events(State(app): State<App>) -> Sse<impl Stream<Item = Result<sse::Event, Infallible>>> {
+    let rx = app.relay().subscribe();
+    let stream = futures_util::stream::unfold((app, rx), |(app, mut rx)| async move {
+        let message = tokio::select! {
+            () = app.relay().shutting_down() => return None,
+            received = rx.recv() => match received {
+                Ok(relayed) => match sse::Event::default()
+                    .event(relayed.event.name())
+                    .json_data(&relayed)
+                {
+                    Ok(message) => message,
+                    Err(err) => {
+                        tracing::error!(%err, "cannot serialize an event");
+                        sse::Event::default().comment("an event could not be serialized")
+                    }
+                },
+                Err(RecvError::Lagged(missed)) => {
+                    tracing::warn!(missed, "an event subscriber fell behind");
+                    sse::Event::default().comment(format!("missed {missed} events"))
+                }
+                Err(RecvError::Closed) => return None,
+            },
+        };
+        Some((Ok(message), (app, rx)))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 #[utoipa::path(get, path = "/api/v1/openapi.json", tag = "server",
     responses((status = 200, description = "This OpenAPI document", content_type = "application/json")))]
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
@@ -399,12 +563,13 @@ fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     ),
     paths(
         health, version, list_channels, now, progress, advance, previous, item, stream,
-        subtitle, history, rescan, openapi,
+        subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, Now, NextItem, Item, Subtitle, ProgressReport,
         AdvanceRequest, AdvanceReason, PreviousRequest, HistoryEntry, EventKind, ScanReport, ErrorBody,
-        ErrorCode,
+        ErrorCode, Action, Direction, Event, RelayedEvent, ClientInfo, ClientPlaying,
+        ActionAccepted,
     )),
     modifiers(&BearerAuth),
     security((), ("bearer" = [])),

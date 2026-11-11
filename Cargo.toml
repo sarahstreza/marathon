@@ -38,6 +38,9 @@ gilrs = "0.11.2"
 glow = "0.17.0"
 glutin = "0.32.3"
 glutin-winit = "0.5.0"
+# Streams for Server-Sent Events (server) and the control channel's
+# WebSocket (client).
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 http-body-util = "0.1.5"
 oas3 = "0.22.0"
 pkg-config = "0.3.34"
@@ -52,6 +55,10 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "fs", "io-util", "time"] }
+# The client end of the control channel (M6). Kept on the version axum's
+# `ws` feature uses (axum 0.8.9: 0.29), so there is one copy; upgrade with
+# axum.
+tokio-tungstenite = "0.29.0"
 toml = "1.2.1"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["fs", "trace"] }
