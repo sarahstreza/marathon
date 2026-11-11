@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use marathon_api::{Event, EventKind, Item, NextItem, Subtitle};
+use marathon_api::{EventKind, HistoryEntry, Item, NextItem, Subtitle};
 
 use super::*;
 
@@ -61,7 +61,7 @@ struct FakeChannel {
 #[derive(Default)]
 struct FakeServer {
     channels: Vec<FakeChannel>,
-    history: Vec<Event>,
+    history: Vec<HistoryEntry>,
     /// Makes `advance` fail as if the server were unreachable.
     fail_advance: bool,
 }
@@ -194,7 +194,7 @@ impl Api for FakeApi {
         Ok(c.now())
     }
 
-    fn history(&self, limit: u32) -> Result<Vec<Event>, ApiError> {
+    fn history(&self, limit: u32) -> Result<Vec<HistoryEntry>, ApiError> {
         self.log(Entry::History);
         let server = self.server.borrow();
         Ok(server
@@ -702,7 +702,7 @@ fn go_to_channel_by_number() {
 #[test]
 fn start_resumes_the_channel_this_client_watched_last() {
     let mut h = Harness::new(3, 2);
-    let event = |client: &str, channel: &str| Event {
+    let event = |client: &str, channel: &str| HistoryEntry {
         id: "e".into(),
         ts_ms: 0,
         client_id: Some(client.into()),

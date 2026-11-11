@@ -10,8 +10,8 @@
 use std::time::Duration;
 
 use marathon_api::{
-    API_PREFIX, AdvanceRequest, CLIENT_ID_HEADER, ChannelSummary, ErrorBody, ErrorCode, Event,
-    Item, Now, PreviousRequest, ProgressReport,
+    API_PREFIX, AdvanceRequest, CLIENT_ID_HEADER, ChannelSummary, ErrorBody, ErrorCode,
+    HistoryEntry, Item, Now, PreviousRequest, ProgressReport,
 };
 use reqwest::Url;
 use reqwest::blocking::{Client, RequestBuilder};
@@ -65,7 +65,7 @@ pub trait Api {
     /// `POST /channels/{id}/previous`.
     fn previous(&self, channel_id: &str, request: &PreviousRequest) -> Result<Now, ApiError>;
     /// `GET /history?limit=`: recent events, newest first.
-    fn history(&self, limit: u32) -> Result<Vec<Event>, ApiError>;
+    fn history(&self, limit: u32) -> Result<Vec<HistoryEntry>, ApiError>;
 }
 
 /// How long to wait to connect, and for a whole request.
@@ -243,7 +243,7 @@ impl Api for HttpApi {
         Ok(self.absolute_now(now))
     }
 
-    fn history(&self, limit: u32) -> Result<Vec<Event>, ApiError> {
+    fn history(&self, limit: u32) -> Result<Vec<HistoryEntry>, ApiError> {
         let mut url = self.route(&["history"]);
         url.query_pairs_mut()
             .append_pair("limit", &limit.to_string());

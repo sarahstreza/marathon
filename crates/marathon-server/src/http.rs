@@ -15,7 +15,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use marathon_api::{
     API_PREFIX, API_VERSION, AdvanceReason, AdvanceRequest, CLIENT_ID_HEADER, ChannelSummary,
-    ErrorBody, ErrorCode, Event, EventKind, Health, Item, NextItem, Now, PreviousRequest,
+    ErrorBody, ErrorCode, EventKind, Health, HistoryEntry, Item, NextItem, Now, PreviousRequest,
     ProgressReport, ScanReport, Subtitle, VersionInfo,
 };
 use serde::Deserialize;
@@ -309,13 +309,13 @@ struct HistoryParams {
     params(("limit" = Option<u32>, Query,
         description = "How many events to return (default 50, at most 1000)")),
     responses(
-        (status = 200, description = "Recent events, newest first", body = Vec<Event>),
+        (status = 200, description = "Recent events, newest first", body = Vec<HistoryEntry>),
         (status = 400, description = "Malformed query", body = ErrorBody),
     ))]
 async fn history(
     State(app): State<App>,
     query: Result<Query<HistoryParams>, QueryRejection>,
-) -> Result<Json<Vec<Event>>, ApiError> {
+) -> Result<Json<Vec<HistoryEntry>>, ApiError> {
     let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let limit = params
         .limit
@@ -329,7 +329,7 @@ async fn history(
                 tracing::warn!(id = %row.id, kind = %row.kind, "skipping event of unknown kind");
                 return None;
             };
-            Some(Event {
+            Some(HistoryEntry {
                 id: row.id,
                 ts_ms: row.ts,
                 client_id: row.client_id,
@@ -403,7 +403,7 @@ fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, Now, NextItem, Item, Subtitle, ProgressReport,
-        AdvanceRequest, AdvanceReason, PreviousRequest, Event, EventKind, ScanReport, ErrorBody,
+        AdvanceRequest, AdvanceReason, PreviousRequest, HistoryEntry, EventKind, ScanReport, ErrorBody,
         ErrorCode,
     )),
     modifiers(&BearerAuth),
