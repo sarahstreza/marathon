@@ -11,6 +11,9 @@
 //! - [`ui`]: the cues the tuner gives the on-screen overlay.
 //! - [`keyboard`] (feature `input-keyboard`), [`mouse`] (`input-mouse`),
 //!   [`gamepad`] (`input-gamepad`): bindings for local input devices.
+//! - [`remote`] (feature `remote`): the control channel to the server, so
+//!   actions relayed through it reach the bus and the client's events
+//!   reach observers.
 //! - [`client_id`]: the per-installation client ID.
 //!
 //! The [`Action`](marathon_api::Action) and [`Event`](marathon_api::Event)
@@ -31,5 +34,7 @@ pub mod keyboard;
 pub mod mouse;
 pub mod navigation;
 pub mod player;
+#[cfg(feature = "remote")]
+pub mod remote;
 pub mod tuner;
 pub mod ui;

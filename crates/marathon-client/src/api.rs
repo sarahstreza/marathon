@@ -148,6 +148,17 @@ impl HttpApi {
         }
     }
 
+    /// The URL of this client's control channel (`/clients/connect`), as
+    /// `ws://` or (for an `https` server) `wss://`.
+    pub fn control_url(&self) -> String {
+        let mut url = self.route(&["clients", "connect"]);
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        // http(s) and ws(s) are all "special" schemes, between which
+        // `set_scheme` always succeeds.
+        let _ = url.set_scheme(scheme);
+        url.into()
+    }
+
     /// The URL of an API route: `segments` are appended to `/api/v1` and
     /// percent-encoded.
     fn route(&self, segments: &[&str]) -> Url {
@@ -282,6 +293,18 @@ mod tests {
         assert_eq!(
             api("https://example.com/marathon/").resolve("/api/v1/stream/x"),
             "https://example.com/marathon/api/v1/stream/x"
+        );
+    }
+
+    #[test]
+    fn control_url_is_a_websocket_url_under_the_base() {
+        assert_eq!(
+            api("http://127.0.0.1:7878").control_url(),
+            "ws://127.0.0.1:7878/api/v1/clients/connect"
+        );
+        assert_eq!(
+            api("https://example.com/marathon/").control_url(),
+            "wss://example.com/marathon/api/v1/clients/connect"
         );
     }
 
