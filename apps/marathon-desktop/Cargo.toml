@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 marathon-api.workspace = true
-marathon-client = { workspace = true, features = ["input-keyboard", "input-mouse"] }
+marathon-client = { workspace = true, features = ["input-keyboard", "input-mouse", "remote"] }
 marathon-mpv.workspace = true
 # For --embedded: runs the server in-process (PLAN.md §9).
 marathon-server.workspace = true
@@ -31,7 +31,11 @@ tracing-subscriber.workspace = true
 winit.workspace = true
 
 [dev-dependencies]
+# The remote-control tests post actions and restart a server on a fixed
+# port.
+reqwest.workspace = true
 tempfile.workspace = true
+tokio.workspace = true
 
 [features]
 default = ["input-gamepad"]
