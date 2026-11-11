@@ -2,7 +2,10 @@
 //! and media streaming. Used by `marathond` and by the desktop client's
 //! embedded mode.
 //!
-//! The usual entry point is [`Server`]:
+//! The usual entry point is [`Server`]. To run a server inside another
+//! (possibly non-async) program, use [`embedded::EmbeddedServer`].
+//!
+//! A standalone server looks like this:
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,6 +21,7 @@ mod app;
 pub mod catalog;
 pub mod config;
 pub mod db;
+pub mod embedded;
 mod error;
 pub mod http;
 pub mod parse;
