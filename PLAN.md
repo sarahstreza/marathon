@@ -223,6 +223,26 @@ rule = { kind = "shuffled" }
 Filesystem sources treat mounted SMB/NFS shares as ordinary paths, which covers
 networked storage on desktop servers for the MVP.
 
+Jellyfin sources (M8) look like this; each library appears as a top-level
+folder named after it, holding the library's own folder layout, so selectors
+work as for a filesystem source:
+
+```toml
+[[source]]
+id = "jellyfin"
+kind = "jellyfin"
+url = "http://jellyfin.lan:8096"
+api_key = "…"                      # never logged or returned by the API
+libraries = ["Shows", "Films"]     # optional; default all
+
+[[channel]]
+id = "office"
+number = 1
+name = "The Office"
+items = [{ source = "jellyfin", path = "Shows/The Office (US)" }]
+rule = { kind = "ordered" }
+```
+
 ---
 
 ## 6. Programming rules (`marathon-rules`)
@@ -267,7 +287,9 @@ sources       (id TEXT PK, kind TEXT, config_json TEXT)
 items         (id TEXT PK, source_id TEXT, path TEXT, size INTEGER, mtime INTEGER,
                show TEXT, season INTEGER, episode INTEGER, title TEXT,
                duration_ms INTEGER NULL, subtitles_json TEXT,
-               missing INTEGER DEFAULT 0, UNIQUE(source_id, path))
+               missing INTEGER DEFAULT 0, external_id TEXT NULL,
+               UNIQUE(source_id, path))
+               -- external_id: the source's own ID (Jellyfin's), for streaming
 channels      (id TEXT PK, number INTEGER, name TEXT, rule_json TEXT, selectors_json TEXT)
 channel_items (channel_id TEXT, item_id TEXT, PRIMARY KEY(channel_id, item_id))
 channel_state (channel_id TEXT PK, item_id TEXT, position_ms INTEGER,
@@ -754,6 +776,18 @@ Behavior follows the product principle: Marathon is a polite guest on input 4.
 
 Catalog from the Jellyfin API (shows, seasons, episodes, durations); the
 server proxies streams with `Range` pass-through.
+
+As built: libraries come from `/Library/VirtualFolders` and their videos from
+paged `/Items` (episodes, movies, videos, music videos; not virtual
+"missing" episodes). Item paths are `<library name>/<path within the
+library's folder>` (or `Series/Season N/Name` when Jellyfin reports no
+file), and show/season/episode/title come from Jellyfin's metadata, not file
+names. Jellyfin's durations are authoritative over client reports. Streams
+proxy `/Videos/{id}/stream?static=true` (the original file), passing range
+and conditional headers both ways; an unreachable Jellyfin is a `502` with
+error code `upstream`. The API key travels only in the `Authorization`
+header. Jellyfin's external subtitle files are not imported (embedded
+subtitles play as usual).
 
 **Complete when:**
 - [auto] Jellyfin client tests run against recorded or mocked API responses
