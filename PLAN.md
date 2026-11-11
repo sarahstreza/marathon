@@ -133,7 +133,7 @@ Get these right before anything else; every component depends on them.
 | Errors | `thiserror` in libraries, `anyhow` in binaries | |
 | Windowing / GL | `winit` + `glutin` + `glow` | One window, one GL context |
 | Video | libmpv, OpenGL render API | Thin hand-written bindings in `marathon-mpv`, linked via `pkg-config` (chosen over `libmpv2` in M3; see §12) |
-| Overlay UI | `egui` via `egui_glow` | Drawn over the video each frame; isolated behind a module so it can be replaced |
+| Overlay UI | `egui` via `egui_glow` | Drawn over the video each frame; isolated behind a module so it can be replaced. `egui_glow` without its `winit` feature, so the overlay needs no windowing library; egui 0.37 needs Rust 1.95 and its `default_fonts` feature |
 | Gamepad | `gilrs` | |
 | HDMI-CEC | libcec via `cec-rs` | Covers Raspberry Pi, the Linux kernel CEC framework, and Pulse-Eight USB adapters |
 | Remote control / events | axum WebSocket + Server-Sent Events | Client control channel and event stream |
@@ -428,7 +428,10 @@ PgUp/PgDn change channel, digits for direct entry (committed on Enter or after
 1.5s), Enter select, Space pause, N/P next/previous item, I info, G guide,
 S subtitles, F fullscreen, Esc back, Q quit. Mouse: wheel changes
 channel, click selects, movement shows the cursor. Gamepad: shoulders change
-channel, D-pad navigates, A select/info, B back, Start pause. CEC: see M7.
+channel, D-pad navigates, A select/info, B back, Start pause; and, so a
+controller can do everything the keyboard can (M5), Y guide, X subtitles,
+triggers next/previous item, Select info, left-stick click fullscreen, Mode
+quit. Only seeking (Left/Right) repeats when held. CEC: see M7.
 
 ### Overlay UI (MVP)
 
