@@ -14,8 +14,19 @@ use proptest::sample::Index;
 /// Folder names chosen to exercise natural sorting and nesting.
 const FOLDERS: &[&str] = &["", "A", "B", "A/Season 2", "A/Season 10", "Essays"];
 
-/// One random item; its ID and path are made unique by `n`.
+/// One random entry, made unique by `n`: usually a video item, sometimes
+/// an entry standing for a whole child channel, keyed the way the server
+/// keys them (PLAN.md M11). The rules must not be able to tell the
+/// difference, so every property below holds for mixes of both.
 fn item(n: usize) -> impl Strategy<Value = ItemKey> {
+    prop_oneof![
+        4 => video(n),
+        1 => Just(common::channel_entry(&format!("child-{n}"))),
+    ]
+}
+
+/// One random video item; its ID and path are made unique by `n`.
+fn video(n: usize) -> impl Strategy<Value = ItemKey> {
     (
         0..FOLDERS.len(),
         prop::option::of(0u32..4),
