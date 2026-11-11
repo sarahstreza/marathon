@@ -4,7 +4,8 @@
 //!
 //! 1. `S01E02` / `s1e2` / `S01.E02` anywhere in the file name;
 //! 2. `1x02` anywhere in the file name (one- or two-digit season, two- or
-//!    three-digit episode, so `1920x1080` is not mistaken for an episode);
+//!    three-digit episode, so `1920x1080` is not mistaken for an episode),
+//!    including multi-episode files like `6x01x02`;
 //! 3. a parent folder named `Season N`, with the episode taken from `E3`,
 //!    `Ep 3`, `Episode 3`, or a leading number in the file name.
 //!
@@ -39,13 +40,19 @@ fn re(pattern: &str) -> Regex {
 static SXXEYY: LazyLock<Regex> =
     LazyLock::new(|| re(r"(?i)(?:^|[^a-z0-9])(s(\d{1,3})[ ._-]?e(\d{1,4}))(?:[^0-9]|$)"));
 
-/// `1x02`. Group 1 is the whole code.
+/// `1x02`, also as the start of a multi-episode `1x02x03`. Group 1 is the
+/// whole code (without any extra episodes).
 static NXNN: LazyLock<Regex> =
-    LazyLock::new(|| re(r"(?i)(?:^|[^a-z0-9])((\d{1,2})x(\d{2,3}))(?:[^0-9a-z]|$)"));
+    LazyLock::new(|| re(r"(?i)(?:^|[^a-z0-9])((\d{1,2})x(\d{2,3}))(?:[^0-9a-z]|x\d|$)"));
 
-/// Extra episodes of a multi-episode file, right after the first code:
-/// the `E03` or `-E03` in `S01E02E03` or `S01E02-E03`.
+/// Extra episodes of a multi-episode `S01E02` file, right after the first
+/// code: the `E03` or `-E03` in `S01E02E03` or `S01E02-E03`.
 static EXTRA_EPISODES: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:[-_ ]?e\d{1,4})+"));
+
+/// Extra episodes of a multi-episode `1x02` file, right after the first
+/// code: the `x03` or `-x03` in `1x02x03` or `1x02-x03`. Kept apart from
+/// [`EXTRA_EPISODES`] so a codec tag (`S01E02 x264`) is never taken for one.
+static EXTRA_NXNN_EPISODES: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:[-_ ]?x\d{2,3})+"));
 
 /// A `Season N` folder name.
 static SEASON_FOLDER: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^season[ ._-]*(\d{1,3})$"));
@@ -80,10 +87,11 @@ pub fn parse_path(path: &str) -> ParsedName {
         .map(clean)
         .filter(|s| !s.is_empty());
 
-    if let Some((season, episode, before, after)) =
-        find_code(&SXXEYY, stem).or_else(|| find_code(&NXNN, stem))
-    {
-        let after = EXTRA_EPISODES.replace(after, "");
+    let code = find_code(&SXXEYY, stem)
+        .map(|found| (found, &*EXTRA_EPISODES))
+        .or_else(|| find_code(&NXNN, stem).map(|found| (found, &*EXTRA_NXNN_EPISODES)));
+    if let Some(((season, episode, before, after), extra)) = code {
+        let after = extra.replace(after, "");
         let show = folder_show
             .or_else(|| non_empty(clean(before)))
             .or_else(|| parent.map(clean).filter(|s| !s.is_empty()));
@@ -242,6 +250,22 @@ mod tests {
         assert_eq!(
             parse_path("Show/Show - S02E05-E06 - Double.mkv"),
             parsed(Some("Show"), 2, 5, "Double")
+        );
+        assert_eq!(
+            parse_path("TV/Parks and Recreation/Parks and Recreation - 6x01x02 - London.mkv"),
+            parsed(Some("Parks and Recreation"), 6, 1, "London")
+        );
+        assert_eq!(
+            parse_path("Show/Show - 8x12-x13 - Double.mkv"),
+            parsed(Some("Show"), 8, 12, "Double")
+        );
+    }
+
+    #[test]
+    fn codec_tag_after_code_stays_in_title() {
+        assert_eq!(
+            parse_path("Show/Show - S01E02 x264.mkv"),
+            parsed(Some("Show"), 1, 2, "x264")
         );
     }
 
