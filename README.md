@@ -38,6 +38,7 @@ milestone checklists. Read it before changing anything substantial.
 | `scripts/make-test-library.sh` | Generates a fake video library for testing |
 | `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
 | `docs/REMOTE.md` | Remote control and events over the API |
+| `docs/TODO.md` | Known follow-ups |
 | `examples/` | Shell scripts that send actions and follow events |
 
 Which crates may depend on which is fixed by PLAN.md §4 and enforced by

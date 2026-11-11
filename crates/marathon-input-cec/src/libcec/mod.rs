@@ -6,6 +6,10 @@
 //! version-specific struct layouts here. The shim's interface is the two
 //! functions and the callback table declared below.
 //!
+//! TODO: replace the shim with Pulse-Eight's official `libcec` crate once
+//! the platforms we build on ship libcec 8 (`cec-rs`, which PLAN.md first
+//! named, is deprecated). See docs/TODO.md.
+//!
 //! libcec calls back on its own threads. The callbacks only translate and
 //! forward to the source's [`EventSender`], which never blocks or panics.
 
