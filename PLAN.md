@@ -828,6 +828,19 @@ Kotlin + Jetpack Compose (Compose for TV for the 10-foot UI), libmpv from the
 mpv-android build, API client generated from `openapi.json`. Gets its own
 planning doc before implementation starts: [`docs/ANDROID.md`](docs/ANDROID.md).
 
+As built: `android/` is a Gradle project with three modules. `:api` is
+generated from `android/api/openapi.json` (a snapshot of `marathond
+--print-openapi`), except `Action`/`Event`. The generator flattens their
+`oneOf`, so they're hand-written in `:core` and checked against JSON
+fixtures the Rust side writes. `:core` is a pure-JVM port of
+`marathon-client` (Tuner, navigation, digits, overlay cues and fades, the
+control channel), and its Tuner tests are the Rust ones by name
+(`scripts/check-tuner-parity.sh`). `:app` plays through libmpv from
+`dev.jdtech.mpv:libmpv` (a Maven Central build of mpv-android's
+libraries). Its overlay is plain Compose rather than Compose for TV,
+because it's display-only, like the desktop's. Going to the background is
+`Standby`, and coming back is `Wake`. JDK 25, compileSdk 37, minSdk 26.
+
 **Complete when:**
 - [auto] The Kotlin API client is generated from the server's `openapi.json` by
   a script, and regenerating it after a server change is one command.

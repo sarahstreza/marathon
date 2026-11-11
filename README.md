@@ -13,7 +13,9 @@ mode: the desktop client runs its own server), M5 (on-screen overlay,
 mouse, and gamepad), M6 (remote control and events over the API), M7
 (HDMI-CEC: the TV's remote, and pausing when the TV switches away), and M8
 (Jellyfin libraries as a source) are implemented and awaiting their manual
-checks. [`PLAN.md`](PLAN.md) has the design, API, and
+checks. M9 (macOS) is not started; it needs Mac hardware. M10 (the Android
+client, [`docs/ANDROID.md`](docs/ANDROID.md)) is implemented and builds an
+APK, but hasn't been run on a device yet. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
 > **AI-generated project.** Everything in this repository, including the
@@ -35,6 +37,7 @@ milestone checklists. Read it before changing anything substantial.
 | `crates/marathon-input-cec` | HDMI-CEC input (TV remote, input switching) via libcec |
 | `apps/marathond` | Server binary |
 | `apps/marathon-desktop` | Desktop client binary |
+| `android/` | Android client (phones and Android TV): Gradle project with `:api` (generated), `:core` (Tuner port), `:app` |
 | `config/example.toml` | Annotated example configuration |
 | `scripts/make-test-library.sh` | Generates a fake video library for testing |
 | `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
@@ -76,6 +79,25 @@ cargo test --workspace
 CI runs these on Linux and macOS (`.github/workflows/ci.yml`), plus
 `scripts/check-seams.sh`, which checks that `winit`/`glutin`/`gilrs` stay
 inside `apps/marathon-desktop/src/platform/` and out of `marathon-client`.
+
+### The Android client
+
+Needs JDK 25 and the Android SDK (platform 37, build-tools 37); setting
+them up, including on Bazzite/Silverblue, is in
+[`docs/ANDROID.md`](docs/ANDROID.md). Then:
+
+```sh
+cd android
+./gradlew check :app:assembleDebug     # tests, lint, and the APK
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+The Kotlin API client is generated from `android/api/openapi.json`, a
+snapshot of the server's API. After changing the HTTP API or the
+`Action`/`Event` types, refresh it with `scripts/gen-android-api.sh`
+(`cargo test` fails until you do). The Android Tuner is a port of
+`marathon-client`'s; `scripts/check-tuner-parity.sh` checks that every
+Rust tuner test has a Kotlin twin.
 
 ### Running the server
 
