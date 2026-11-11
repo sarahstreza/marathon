@@ -1929,6 +1929,7 @@ dependencies = [
  "glutin-winit",
  "marathon-api",
  "marathon-client",
+ "marathon-input-cec",
  "marathon-mpv",
  "marathon-server",
  "raw-window-handle",
@@ -1938,6 +1939,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "winit",
+]
+
+[[package]]
+name = "marathon-input-cec"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "marathon-api",
+ "marathon-client",
+ "pkg-config",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

@@ -22,6 +22,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("marathon-server", &["marathon-api", "marathon-rules"]),
     ("marathon-client", &["marathon-api"]),
     ("marathon-mpv", &[]),
+    ("marathon-input-cec", &["marathon-api", "marathon-client"]),
     ("marathond", &["marathon-server", "marathon-api"]),
     (
         "marathon-desktop",
@@ -30,6 +31,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "marathon-mpv",
             "marathon-server",
             "marathon-api",
+            "marathon-input-cec",
         ],
     ),
 ];

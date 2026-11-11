@@ -10,7 +10,8 @@ and M2 (server) are done. M3 (minimal desktop client: video, keyboard, no
 overlay), M3.5 (seams: pluggable input, `Action`/`Event` control plane,
 skipping unplayable items, windowing kept at the edge), M4 (embedded
 mode: the desktop client runs its own server), M5 (on-screen overlay,
-mouse, and gamepad), and M6 (remote control and events over the API) are
+mouse, and gamepad), M6 (remote control and events over the API), and M7
+(HDMI-CEC: the TV's remote, and pausing when the TV switches away) are
 implemented and awaiting their manual checks. [`PLAN.md`](PLAN.md) has the design, API, and
 milestone checklists. Read it before changing anything substantial.
 
@@ -30,12 +31,14 @@ milestone checklists. Read it before changing anything substantial.
 | `crates/marathon-server` | Server library: config, catalog, database, routes, streaming |
 | `crates/marathon-client` | Client library: API client, Tuner state machine, input actions |
 | `crates/marathon-mpv` | Safe libmpv wrapper |
+| `crates/marathon-input-cec` | HDMI-CEC input (TV remote, input switching) via libcec |
 | `apps/marathond` | Server binary |
 | `apps/marathon-desktop` | Desktop client binary |
 | `config/example.toml` | Annotated example configuration |
 | `scripts/make-test-library.sh` | Generates a fake video library for testing |
 | `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
 | `docs/REMOTE.md` | Remote control and events over the API |
+| `docs/TODO.md` | Known follow-ups |
 | `examples/` | Shell scripts that send actions and follow events |
 
 Which crates may depend on which is fixed by PLAN.md §4 and enforced by
@@ -53,6 +56,12 @@ desktop app with `--no-default-features` to leave gamepads out):
 | Fedora (incl. a toolbox/distrobox on Silverblue, Bazzite, ...) | `sudo dnf install mpv-devel systemd-devel` |
 | Debian / Ubuntu | `sudo apt install libmpv-dev libudev-dev` |
 | macOS | `brew install mpv pkgconf` |
+
+HDMI-CEC support (the TV's remote) is optional and off by default. To build
+it, add libcec's development files (libcec 4 or newer: `libcec-devel` on
+Fedora, `libcec-dev libp8-platform-dev` on Debian/Ubuntu, `brew install
+libcec` on macOS) and build with `--features input-cec`. libcec is
+GPL-2.0-or-later, so such builds are covered by the GPL.
 
 Every change must pass:
 
@@ -116,6 +125,12 @@ for keyboard, mouse, and game controller. In short: PgUp/PgDn (or the
 arrows, the controller's shoulder buttons, or the mouse wheel) change
 channel; G opens the guide; Space pauses; N/P skip episodes; I shows
 what's on; Q quits.
+
+**TV remote (HDMI-CEC):** built with `--features input-cec` and run with
+`--cec`, the TV's own remote controls Marathon, and switching the TV to
+another input (or turning it off) pauses it. Marathon never switches or
+powers the TV by itself. See the TV remote section of
+[`docs/CONTROLS.md`](docs/CONTROLS.md).
 
 **Remote control:** the client keeps a connection open to its server,
 so anything else can drive it and follow along over the API, for example

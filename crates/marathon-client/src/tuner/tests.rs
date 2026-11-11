@@ -935,15 +935,132 @@ fn a_started_item_ends_the_failure_streak() {
 }
 
 #[test]
-fn unsupported_actions_are_ignored() {
+fn window_actions_are_ignored() {
     let mut h = Harness::new(1, 2);
     h.tuner.start(Some(1)).unwrap();
     h.take();
-    for action in [Action::Standby, Action::Wake, Action::ToggleFullscreen] {
-        assert_eq!(h.action(action.clone()), Flow::Continue, "{action:?}");
-    }
+    assert_eq!(h.action(Action::ToggleFullscreen), Flow::Continue);
     assert_eq!(h.take(), vec![]);
     assert_eq!(h.playing_item(), "c1-0");
+}
+
+#[test]
+fn standby_pauses_and_reports_and_wake_resumes() {
+    let mut h = Harness::new(1, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.position.set(Some(3 * MIN));
+    h.take();
+    h.take_events();
+
+    h.action(Action::Standby);
+    assert!(h.tuner.in_standby());
+    let entries = h.take();
+    assert_eq!(entries[0], Entry::Pause(true));
+    let reports = Harness::progress_reports(&entries);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].1.position_ms, 3 * MIN);
+    assert!(reports[0].1.paused);
+    assert_eq!(h.saved("c1"), ("c1-0".into(), 3 * MIN));
+    let events = h.take_events();
+    assert!(matches!(events[0], Event::Paused { .. }), "{events:?}");
+    assert_eq!(events[1], Event::Standby);
+    // Paused: no periodic reports while in standby.
+    assert_eq!(h.tuner.next_deadline(), None);
+
+    // Standby again changes nothing.
+    h.action(Action::Standby);
+    assert_eq!(h.take(), vec![]);
+    assert_eq!(h.take_events(), vec![]);
+
+    h.action(Action::Wake);
+    assert!(!h.tuner.in_standby());
+    assert_eq!(h.take()[0], Entry::Pause(false));
+    let events = h.take_events();
+    assert_eq!(events[0], Event::Wake);
+    assert!(matches!(events[1], Event::Resumed { .. }), "{events:?}");
+    // Waking when awake changes nothing.
+    h.action(Action::Wake);
+    assert_eq!(h.take(), vec![]);
+    assert_eq!(h.take_events(), vec![]);
+}
+
+#[test]
+fn wake_keeps_a_pause_the_viewer_chose() {
+    let mut h = Harness::new(1, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.position.set(Some(MIN));
+    h.action(Action::Pause);
+    h.take();
+    h.take_events();
+
+    h.action(Action::Standby);
+    // Already paused: just a progress report.
+    let entries = h.take();
+    assert!(!entries.contains(&Entry::Pause(true)), "{entries:?}");
+    assert_eq!(Harness::progress_reports(&entries).len(), 1);
+    h.action(Action::Wake);
+    assert_eq!(h.take(), vec![]);
+    assert!(h.tuner.player().is_paused());
+    assert_eq!(h.take_events(), vec![Event::Standby, Event::Wake]);
+}
+
+#[test]
+fn playing_anything_ends_standby() {
+    let mut h = Harness::new(2, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.position.set(Some(MIN));
+
+    // Pressing play.
+    h.action(Action::Standby);
+    h.take_events();
+    h.action(Action::TogglePause);
+    assert!(!h.tuner.in_standby());
+    let events = h.take_events();
+    assert_eq!(events[0], Event::Wake, "{events:?}");
+    assert!(matches!(events[1], Event::Resumed { .. }));
+
+    // Changing channel.
+    h.action(Action::Standby);
+    h.take_events();
+    h.action(Action::ChannelUp);
+    assert!(!h.tuner.in_standby());
+    assert!(!h.tuner.player().is_paused());
+    let events = h.take_events();
+    assert!(events.contains(&Event::Wake), "{events:?}");
+
+    // Skipping.
+    h.action(Action::Standby);
+    h.take_events();
+    h.action(Action::NextItem);
+    assert!(!h.tuner.in_standby());
+    assert!(h.take_events().contains(&Event::Wake));
+
+    // A later wake has nothing to do.
+    h.take();
+    h.action(Action::Wake);
+    assert_eq!(h.take(), vec![]);
+    assert_eq!(h.take_events(), vec![]);
+}
+
+#[test]
+fn standby_hides_the_overlay_and_closes_the_guide() {
+    let mut h = Harness::new(2, 2);
+    h.tuner.start(Some(1)).unwrap();
+    h.action(Action::ToggleGuide);
+    h.take_ui();
+    h.action(Action::Standby);
+    assert_eq!(h.take_ui(), vec![UiEvent::Guide(None), UiEvent::Hide]);
+    assert!(!h.tuner.navigation().guide_open());
+}
+
+#[test]
+fn standby_with_nothing_playing_does_not_panic() {
+    let mut h = Harness::new(1, 2);
+    h.action(Action::Standby);
+    assert!(h.tuner.in_standby());
+    h.action(Action::Wake);
+    assert!(!h.tuner.in_standby());
+    assert_eq!(h.take_events(), vec![Event::Standby, Event::Wake]);
 }
 
 #[test]

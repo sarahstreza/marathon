@@ -24,18 +24,14 @@
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use marathon_api::{Action, Direction};
 
 use crate::bus::ActionSender;
+use crate::digits::ChannelNumberEntry;
+pub use crate::digits::DIGIT_TIMEOUT;
 use crate::input::{InputError, InputSource};
-
-/// How long after the last digit a channel number is committed.
-pub const DIGIT_TIMEOUT: Duration = Duration::from_millis(1500);
-
-/// Longest channel number that can be typed.
-const MAX_DIGITS: usize = 4;
 
 /// A key press, independent of windowing library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,11 +88,11 @@ pub fn repeats(key: Key) -> bool {
 /// Digits are buffered; the number is committed as
 /// [`Action::GoToChannel`] when Enter is pressed or [`DIGIT_TIMEOUT`]
 /// passes without another digit (call [`Keyboard::tick`] by
-/// [`Keyboard::deadline`]). Any other key discards pending digits.
+/// [`Keyboard::deadline`]). Any other key discards pending digits. (See
+/// [`crate::digits`].)
 #[derive(Debug, Default)]
 pub struct Keyboard {
-    digits: String,
-    last_digit: Option<Instant>,
+    digits: ChannelNumberEntry,
 }
 
 impl Keyboard {
@@ -109,46 +105,30 @@ impl Keyboard {
         if let Key::Character(c) = key
             && let Some(d) = c.to_digit(10)
         {
-            if self.digits.len() < MAX_DIGITS {
-                self.digits.push(char::from(b'0' + d as u8));
-            }
-            self.last_digit = Some(now);
+            // A decimal digit is 0..=9, so it fits in a u8.
+            self.digits.digit(d as u8, now);
             return None;
         }
         if key == Key::Enter && !self.digits.is_empty() {
-            return self.commit();
+            return self.digits.commit();
         }
-        self.clear();
+        self.digits.clear();
         map_key(key)
     }
 
     /// When pending digits will be committed, if any are pending.
     pub fn deadline(&self) -> Option<Instant> {
-        self.last_digit.map(|t| t + DIGIT_TIMEOUT)
+        self.digits.deadline()
     }
 
     /// Commits pending digits if their timeout has passed.
     pub fn tick(&mut self, now: Instant) -> Option<Action> {
-        match self.deadline() {
-            Some(deadline) if now >= deadline => self.commit(),
-            _ => None,
-        }
+        self.digits.tick(now)
     }
 
     /// The digits typed so far, for display.
     pub fn pending_digits(&self) -> &str {
-        &self.digits
-    }
-
-    fn commit(&mut self) -> Option<Action> {
-        let number = self.digits.parse().ok();
-        self.clear();
-        number.map(|number| Action::GoToChannel { number })
-    }
-
-    fn clear(&mut self) {
-        self.digits.clear();
-        self.last_digit = None;
+        self.digits.pending()
     }
 }
 
@@ -255,6 +235,8 @@ impl InputSource for KeyboardSource {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::bus::ActionBus;
 

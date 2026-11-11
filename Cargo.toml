@@ -15,11 +15,15 @@ publish = false
 marathon-api = { path = "crates/marathon-api" }
 marathon-rules = { path = "crates/marathon-rules" }
 marathon-server = { path = "crates/marathon-server" }
-marathon-client = { path = "crates/marathon-client" }
+# Without its default features; each user picks the inputs it needs.
+marathon-client = { path = "crates/marathon-client", default-features = false }
 marathon-mpv = { path = "crates/marathon-mpv" }
+marathon-input-cec = { path = "crates/marathon-input-cec" }
 
 # External crates.
 anyhow = "1.0.104"
+# Compiles marathon-input-cec's small C shim over libcec.
+cc = "1.11.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 dirs = "7.0.0"
