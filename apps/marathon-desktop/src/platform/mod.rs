@@ -13,11 +13,17 @@
 //! - mpv's frame callback posts [`UserEvent::Frame`] through the event
 //!   loop proxy; the handler asks the renderer whether a frame is due
 //!   and, if so, requests a redraw. mpv is never called from the callback.
-//! - A redraw draws and presents (vsynced).
-//! - `ControlFlow::Wait` throughout, so the app does not spin.
+//! - Overlay messages post [`UserEvent::Overlay`]; the handler applies
+//!   them and redraws if they changed what is on screen.
+//! - A redraw draws video and overlay and presents (vsynced).
+//! - Between events the loop sleeps (`ControlFlow::Wait`, or `WaitUntil`
+//!   the next overlay fade). Only while an overlay fade is
+//!   running does it redraw continuously, at the display's refresh rate.
 
 mod gl;
 mod keys;
+
+use std::time::Instant;
 
 use marathon_client::keyboard::KeyFeed;
 use marathon_mpv::Mpv;
@@ -27,6 +33,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::window::WindowId;
 
 use self::gl::GlWindowSurface;
+use crate::overlay::Overlay;
+use crate::overlay::fade::Wake;
 use crate::renderer::Renderer;
 
 /// Events posted to the event loop from other threads.
@@ -34,6 +42,8 @@ use crate::renderer::Renderer;
 enum UserEvent {
     /// mpv may have a new frame.
     Frame,
+    /// The overlay has messages waiting.
+    Overlay,
     ToggleFullscreen,
     Quit,
 }
@@ -68,6 +78,16 @@ impl PlatformHandle {
     pub fn quit(&self) {
         let _ = self.0.send_event(UserEvent::Quit);
     }
+
+    /// Tells the window the overlay has messages to apply.
+    pub fn overlay_changed(&self) {
+        let _ = self.0.send_event(UserEvent::Overlay);
+    }
+}
+
+/// Where the platform sends local input.
+pub struct InputFeeds {
+    pub keys: KeyFeed,
 }
 
 /// The event loop, before it runs.
@@ -86,20 +106,22 @@ impl Platform {
         PlatformHandle(self.event_loop.create_proxy())
     }
 
-    /// Opens the window, renders `mpv` into it, feeds key presses to
-    /// `keys`, and runs until the app shuts down. Must run on the main
+    /// Opens the window, renders `mpv` and `overlay` into it, feeds input
+    /// to `input`, and runs until the app shuts down. Must run on the main
     /// thread.
     pub fn run(
         self,
         options: Options,
         mpv: Mpv,
-        keys: KeyFeed,
+        overlay: Overlay,
+        input: InputFeeds,
         hooks: impl Hooks + 'static,
     ) -> anyhow::Result<()> {
         let mut app = App {
             options,
             mpv,
-            keys,
+            overlay,
+            input,
             hooks: Box::new(hooks),
             proxy: self.event_loop.create_proxy(),
             graphics: None,
@@ -124,7 +146,8 @@ struct Graphics {
 struct App {
     options: Options,
     mpv: Mpv,
-    keys: KeyFeed,
+    overlay: Overlay,
+    input: InputFeeds,
     hooks: Box<dyn Hooks>,
     proxy: EventLoopProxy<UserEvent>,
     graphics: Option<Graphics>,
@@ -185,6 +208,13 @@ impl ApplicationHandler<UserEvent> for App {
                     g.surface.window().request_redraw();
                 }
             }
+            UserEvent::Overlay => {
+                if self.overlay.pump(Instant::now())
+                    && let Some(g) = &self.graphics
+                {
+                    g.surface.window().request_redraw();
+                }
+            }
             UserEvent::ToggleFullscreen => {
                 if let Some(g) = &self.graphics {
                     g.surface.toggle_fullscreen();
@@ -204,16 +234,36 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(g) = &self.graphics {
-                    g.renderer.draw(&g.surface);
+                if let Some(g) = &mut self.graphics {
+                    g.renderer.draw(&g.surface, &self.overlay, Instant::now());
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(key) = keys::translate(&event.logical_key) {
-                    self.keys.press(key, event.repeat);
+                    self.input.keys.press(key, event.repeat);
                 }
             }
             _ => {}
         }
+    }
+
+    /// Runs after each batch of events: keeps an overlay fade animating,
+    /// and decides how long to sleep.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(g) = &self.graphics else {
+            return;
+        };
+        let now = Instant::now();
+        let wake = self.overlay.wake(now);
+        // Redraw while a fade runs, and once more after the overlay has
+        // gone, to clear its last faint frame.
+        if wake == Wake::Animating || (g.renderer.overlay_on_screen() && !self.overlay.visible(now))
+        {
+            g.surface.window().request_redraw();
+        }
+        event_loop.set_control_flow(match wake {
+            Wake::At(t) => ControlFlow::WaitUntil(t),
+            Wake::Animating | Wake::Idle => ControlFlow::Wait,
+        });
     }
 }

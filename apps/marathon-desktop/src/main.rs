@@ -13,25 +13,30 @@
 //! How the pieces fit (PLAN.md §9):
 //!
 //! ```text
-//! platform (window, keys) ──Key──► keyboard InputSource ──Action──► action bus
-//!                                                                     │ route()
-//!                        ◄── fullscreen / quit ───────────────────────┤
-//!                                                                     ▼
-//! platform ◄── frames ── renderer ◄── mpv ◄── MpvPlayer ◄── tuner thread
+//! platform (window, keys) ──────────────► input sources ──Action──► action bus
+//!                                                                         │ route()
+//!                        ◄── fullscreen / quit ───────────────────────────┤
+//!                                                                         ▼
+//! platform ◄── frames ── renderer ◄── mpv ◄── MpvPlayer ◄───────── tuner thread
+//!                           ▲                                             │
+//!                           └──── overlay ◄── cues, progress, errors ─────┘
 //! ```
 //!
 //! - [`platform`]: the main thread's event loop and window; the only code
 //!   that knows about winit/glutin.
-//! - [`renderer`]: draws mpv's video into any [`surface::Surface`].
+//! - [`renderer`]: draws mpv's video and the [`overlay`] into any
+//!   [`surface::Surface`].
+//! - [`overlay`]: the channel banner, guide, and error toasts (egui).
 //! - [`controller`]: routes actions and runs the tuner thread, which makes
-//!   the (blocking) API calls and commands mpv through [`player`].
+//!   the (blocking) API calls, commands mpv through [`player`], and feeds
+//!   the overlay.
 //!
 //! libmpv is thread-safe, so the renderer and the tuner thread share one
-//! player. There is no overlay yet (M5): channel changes, info, and the
-//! guide are logged to the console. Logging is controlled with `RUST_LOG`
-//! (default `info`; `RUST_LOG=info,mpv=debug` shows mpv's own log).
+//! player. Logging is controlled with `RUST_LOG` (default `info`;
+//! `RUST_LOG=info,mpv=debug` shows mpv's own log).
 
 mod controller;
+mod overlay;
 mod platform;
 mod player;
 mod renderer;
@@ -58,7 +63,8 @@ use marathon_server::embedded::EmbeddedServer;
 use tracing_subscriber::EnvFilter;
 
 use crate::controller::{Exit, Msg, Route, WindowCommand};
-use crate::platform::{Hooks, Options, Platform};
+use crate::overlay::{Overlay, OverlayMsg};
+use crate::platform::{Hooks, InputFeeds, Options, Platform};
 use crate::player::MpvPlayer;
 
 /// Watches Marathon channels.
@@ -216,6 +222,11 @@ fn main() -> anyhow::Result<()> {
     let (keyboard, keys) = KeyboardSource::new();
     inputs.start(Box::new(keyboard), &bus)?;
 
+    let (overlay, overlay_feed) = {
+        let window = window.clone();
+        Overlay::new(move || window.overlay_changed())
+    };
+    let (cues, errors) = (overlay_feed.clone(), overlay_feed.clone());
     let tuner = Tuner::new(
         api,
         MpvPlayer::new(mpv.clone()),
@@ -224,13 +235,20 @@ fn main() -> anyhow::Result<()> {
             client_id: Some(client_id),
             ..TunerConfig::default()
         },
-    );
+    )
+    .with_ui_sink(move |cue| cues.send(OverlayMsg::Ui(cue)))
+    .with_event_sink(move |event| {
+        tracing::debug!(?event, "event");
+        if let marathon_api::Event::Error { message } = event {
+            errors.send(OverlayMsg::Toast(message));
+        }
+    });
     let wake = tx.clone();
     let start_channel = args.channel;
     let tuner_thread = std::thread::Builder::new()
         .name("tuner".into())
         .spawn(move || {
-            let exit = controller::run(tuner, events, rx, wake, start_channel);
+            let exit = controller::run(tuner, events, rx, wake, overlay_feed, start_channel);
             // Tell the window, in case it did not ask us to stop.
             window.quit();
             exit
@@ -247,7 +265,8 @@ fn main() -> anyhow::Result<()> {
             fullscreen: !args.windowed,
         },
         mpv,
-        keys,
+        overlay,
+        InputFeeds { keys },
         app,
     );
 
