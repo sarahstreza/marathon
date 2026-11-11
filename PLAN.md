@@ -10,6 +10,31 @@ client for Linux and macOS, with an Android client to follow.
 
 ---
 
+## Product principle: Marathon is HDMI input 4
+
+The user's Apple TV or PS5 is on input 1. It is their media hub: polished,
+powerful, the main thing they do on the TV. Marathon is not trying to replace
+it. Marathon is the thing on input 4, the PC app on a second monitor, the phone
+propped up while you eat: background television you can glance up at while
+cleaning the kitchen. Because it has to fit into the user's life rather than
+be the centre of it, it must be **extensible**. When in doubt, decisions follow
+from this:
+
+- **Bendable over polished.** Every way to control or observe Marathon is a
+  pluggable adapter (keyboard, gamepad, CEC, HTTP, home automation, AI agents,
+  things we haven't thought of). The network API is a first-class interface,
+  not an afterthought.
+- **Polite.** Marathon never takes over the TV or the house uninvited. It does
+  not switch the TV's input on boot, does not power the TV on or off unless
+  configured to, and coexists with whatever is on input 1.
+- **Glanceable.** UI must be readable from across a room. Nothing blocks
+  playback waiting for a response; there is no "are you still watching?".
+- **Keeps going.** The default state is "playing something". Interruptions
+  (errors, missing files, unreachable sources) skip ahead and log rather than
+  stopping the channel.
+
+---
+
 ## 1. Core semantics
 
 Get these right before anything else; every component depends on them.
@@ -69,6 +94,13 @@ Get these right before anything else; every component depends on them.
 5. **Event log plus derived state.** Every playback event is appended to an
    `events` table. Current position lives in `channel_state` for fast reads, but
    history, stats, and search are derived from `events`.
+6. **Control is pluggable in both directions.** Inputs are adapters that emit
+   `Action`s; observers subscribe to state events. Local adapters run in the
+   client; remote adapters reach the client through the server. See §9,
+   "Input and control".
+7. **Platform edges stay at the edges.** Windowing and input libraries (`winit`,
+   `glutin`, `gilrs`) never leak into the renderer, Tuner, or overlay UI, so a
+   bare-metal DRM/KMS backend can be added later for an appliance build (§13).
 
 ### Consequences to remember
 
@@ -100,9 +132,11 @@ Get these right before anything else; every component depends on them.
 | Logging | `tracing`, `tracing-subscriber` | |
 | Errors | `thiserror` in libraries, `anyhow` in binaries | |
 | Windowing / GL | `winit` + `glutin` + `glow` | One window, one GL context |
-| Video | libmpv, OpenGL render API | Thin hand-written bindings in `marathon-mpv`, linked via `pkg-config` (chosen over `libmpv2` in M3; see §12) |
+| Video | libmpv, OpenGL render API | `libmpv2` crate if it supports the render API cleanly at current versions; otherwise thin `bindgen` bindings in `marathon-mpv` (the needed surface is small) |
 | Overlay UI | `egui` via `egui_glow` | Drawn over the video each frame; isolated behind a module so it can be replaced |
 | Gamepad | `gilrs` | |
+| HDMI-CEC | libcec via `cec-rs` | Covers Raspberry Pi, the Linux kernel CEC framework, and Pulse-Eight USB adapters |
+| Remote control / events | axum WebSocket + Server-Sent Events | Client control channel and event stream |
 | Testing | `proptest`, `tempfile`, `tokio::test` | |
 
 **Version alignment warning:** `egui-winit`/`egui_glow` pin specific `winit`
@@ -128,10 +162,11 @@ marathon/
   scripts/
     make-test-library.sh     # generates a fake library of tiny ffmpeg clips
   crates/
-    marathon-api/            # request/response types, shared enums, OpenAPI derive
+    marathon-api/            # request/response types, Action and Event enums, OpenAPI derive
     marathon-rules/          # pure programming-rules engine; no I/O
-    marathon-server/         # library: config, catalog, sources, db, routes, streaming
-    marathon-client/         # library: API client, Tuner state machine, Player trait, Action enum
+    marathon-server/         # library: config, catalog, sources, db, routes, streaming, client relay
+    marathon-client/         # library: API client, Tuner state machine, Player and InputSource traits, action bus
+    marathon-input-cec/      # CEC InputSource (libcec), behind a cargo feature
     marathon-mpv/            # safe wrapper over libmpv incl. render API
   apps/
     marathond/               # server binary
@@ -267,12 +302,16 @@ via `http-header-fields`).
 | GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch |
 | POST | `/channels/{id}/progress` | `{item_id, position_ms, duration_ms?, paused}` |
 | POST | `/channels/{id}/advance` | `{from_item_id, reason: "ended" \| "skipped"}` → new `now`. **Idempotent:** if `from_item_id` is not the channel's current item, return the current `now` without advancing |
-| POST | `/channels/{id}/previous` | `{from_item_id}` → new `now`. Step back via the rule's `previous`; idempotent like `advance` |
+| POST | `/channels/{id}/previous` | Step back via the rule's `previous` |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
 | GET | `/history?limit=` | Recent events, newest first |
 | POST | `/library/rescan` | Rescan all sources |
+| GET | `/clients` | Connected clients, with what each is playing |
+| GET (WebSocket) | `/clients/connect` | A client's control channel: server pushes relayed `Action`s, client pushes `Event`s |
+| POST | `/clients/{id}/actions` | Relay an `Action` to a client. `{id}` may be `default` (the most recently active client) |
+| GET | `/events` | Server-Sent Events stream of all client and channel events |
 | GET | `/openapi.json` | OpenAPI document |
 
 Clients identify themselves with an `X-Marathon-Client` header (a UUID generated
@@ -295,6 +334,12 @@ once and stored locally).
   the app does not spin. Request redraws continuously only while an overlay
   animation is running.
 - On macOS the event loop and GL context must stay on the main thread.
+- **Keep winit at the edge.** The renderer takes a `Surface` abstraction (GL
+  function loader, drawable size, scale factor, present) and nothing
+  winit-specific. All `winit`/`glutin` code lives in one platform module of
+  `marathon-desktop`. A future appliance backend supplies a `Surface` from
+  GBM/EGL/KMS and input from libinput, without touching the renderer, Tuner,
+  or overlay.
 
 ### Tuner state machine (`marathon-client`)
 
@@ -315,23 +360,70 @@ Idle → Tuning(channel) → Playing(channel, item) ─ended→ Advancing → Pl
 - Show the channel banner the instant a switch begins, before the video loads,
   so switching feels immediate even when the stream takes a moment to open.
 
-### Input
+### Input and control
 
-All input maps to one `Action` enum, so every control method drives the same
-behavior:
+Every way of controlling Marathon is an **adapter** that emits `Action`s, and
+every way of observing it subscribes to **`Event`s**. Extensibility in both
+directions is a core requirement (see the product principle): users will wire
+Marathon into setups nobody can predict.
 
 ```
-ChannelUp, ChannelDown, GoToChannel(u32), TogglePause, SeekRelative(i32),
-NextItem, PreviousItem, ShowInfo, ToggleGuide, Back, ToggleSubtitles,
-ToggleFullscreen, Quit
+ Local adapters (in the client)        Remote adapters (through the server)
+   keyboard, mouse, gamepad, CEC,        HTTP/curl, home automation,
+   libinput (appliance, later)           AI agents (MCP), phone remotes
+              │                                       │
+              │                          POST /clients/{id}/actions
+              ▼                                       ▼
+        ┌──────────── Action bus (client) ◄── WebSocket relay (server)
+        ▼
+   Tuner + overlay UI ──► Events ──► server ──► GET /events (SSE) ──► observers
 ```
 
-MVP bindings — keyboard: PgUp/PgDn or Up/Down for channels, digits for direct
-entry (committed on Enter or after 1.5s), Space pause, Left/Right seek ±10s,
-N/P next/previous item, I info, G guide, S subtitles, F fullscreen, Esc back,
-Q quit. (`ToggleSubtitles` and `ToggleFullscreen` were added in M3 for its
-subtitle and fullscreen checks.) Gamepad: shoulders change channel, A info/select,
-B back, Start pause, D-pad navigates the guide.
+**Actions.** `Action` and `Event` live in `marathon-api` because the server
+relays them. Both serialize as tagged JSON with snake_case names, e.g.
+`{"action": "go_to_channel", "number": 4}`. Initial set:
+
+```
+ChannelUp, ChannelDown, GoToChannel(u32), GoToChannelId(String),
+TogglePause, Play, Pause, SeekRelative(i32), NextItem, PreviousItem,
+Navigate(Up | Down | Left | Right), Select, Back,
+ShowInfo, ToggleGuide, Standby, Wake, Quit
+```
+
+Actions are semantic, not device-shaped. The UI resolves `Navigate` by context:
+with no overlay open, Up/Down change channel and Left/Right seek; with the
+guide open, they move the selection. This makes a TV remote's D-pad, a gamepad
+D-pad, and arrow keys behave identically without per-device logic.
+
+**Events (initial set).** `NowPlaying {channel, item, position}`,
+`ChannelChanged`, `Paused`, `Resumed`, `ItemEnded`, `Standby`, `Wake`,
+`Error {message}`.
+
+**Local adapters** implement an `InputSource` trait: started with a sender
+into the action bus, run on their own task or thread, and stopped cleanly.
+Any number run at once. Each lives behind a cargo feature (`input-keyboard`,
+`input-gamepad`, `input-cec`, ...) so builds include only what a platform needs.
+
+**Remote adapters** go through the server, since it's the network-facing
+process. Each client keeps a WebSocket to the server (reconnecting with
+backoff); `POST /clients/{id}/actions` relays an `Action` to it, and the client
+publishes its `Event`s back up the same socket for `GET /events`.
+
+**No in-process plugin ABI.** Rust has no stable ABI, and dynamically loaded
+plugins are a maintenance trap. Third-party extensions are separate programs
+that speak the HTTP API. A Home Assistant integration, an MQTT bridge, an MCP
+server for AI agents, or a phone remote page is each a small standalone program
+over that API. The API's completeness is what makes Marathon extensible, so
+anything the UI can do must also be possible through it.
+
+**Conflicts.** Last action wins. No input source can lock out another, and
+there is no modal state that an adapter could leave stuck.
+
+**MVP bindings.** Keyboard: arrows navigate (per the context rule above),
+PgUp/PgDn change channel, digits for direct entry, Enter select, Space pause,
+N/P next/previous item, I info, G guide, Esc back, Q quit. Mouse: wheel changes
+channel, click selects, movement shows the cursor. Gamepad: shoulders change
+channel, D-pad navigates, A select/info, B back, Start pause. CEC: see M7.
 
 ### Overlay UI (MVP)
 
@@ -483,6 +575,49 @@ keyboard input. No overlay; channel changes are logged to the console.
 - [manual] Hardware decode is active on the dev machine (confirm via mpv's
   `hwdec-current` property in the log).
 
+### M3.5 — Seams (refactor of the existing M3 code)
+
+M0–M3 were built before the input/control architecture and the appliance
+direction were added to this plan. This milestone brings the existing code in
+line with §2 decisions 6–7, §9 "Input and control", and the product principle,
+without adding user-facing features. Do it before M4 so later milestones
+build on the right shape.
+
+Changes:
+- Move `Action` from `marathon-client` to `marathon-api`, expand it to the full
+  set in §9, add `Event`, and make both serialize as tagged snake_case JSON.
+- Introduce the `InputSource` trait and the client action bus; port keyboard
+  input to an `InputSource` behind the `input-keyboard` feature.
+- Implement context resolution for `Navigate` and update keyboard bindings to
+  §9 (arrows navigate, PgUp/PgDn change channel, Enter selects).
+- Introduce the `Surface` abstraction and confine all `winit`/`glutin` code to
+  one platform module in `marathon-desktop`.
+- "Keeps going": an item that fails to load or play is skipped with an
+  `Error` event, rather than stopping the channel.
+
+**Complete when:**
+- [auto] `Action` and `Event` live in `marathon-api`; a round-trip serialization
+  test covers every variant and asserts the JSON shape for at least
+  `channel_up`, `go_to_channel`, and `navigate`.
+- [auto] Variants the client doesn't handle yet (e.g. `Standby`, `Wake`) are
+  logged and ignored, never panic.
+- [auto] Two mock `InputSource`s running concurrently both deliver actions to
+  the bus, and stopping one leaves the other working.
+- [auto] `Navigate` resolution is unit tested: with no overlay, Up/Down change
+  channel and Left/Right seek; with the guide state open, they move the
+  selection.
+- [auto] Keyboard mapping test updated to the §9 bindings.
+- [auto] A CI check confirms `marathon-client` has no `winit`, `glutin`, or
+  `gilrs` dependency (`cargo tree`), and that `winit`/`glutin` are referenced
+  only inside `marathon-desktop`'s platform module (a grep script).
+- [auto] Tuner test with a mock `Player` that fails to load: the channel skips
+  to the next item and emits `Error`. After a configurable number of
+  consecutive failures (default 5) it stops retrying and surfaces a message
+  instead of looping forever.
+- [manual] Every M3 manual criterion still passes (regression check).
+- [manual] Renaming or deleting a file in the test library mid-channel causes a
+  skip, not a stall.
+
 ### M4 — Embedded mode
 
 `marathon-desktop --embedded --config <path>` runs the server in-process.
@@ -523,7 +658,71 @@ egui overlay with channel banner and guide, eased fades, cursor hiding,
   and unplugging the controller mid-session works without restart.
 - [manual] The mouse cursor hides after inactivity and reappears on movement.
 
-### M6 — Jellyfin source
+### M6 — Remote control and events
+
+Client WebSocket control channel, action relay, and event stream, as in §8 and
+§9 "Input and control". This is the extension surface everything else
+(home automation, AI agents, phone remotes) will build on.
+
+**Complete when:**
+- [auto] A client registers over `/clients/connect` and reconnects with backoff
+  after a server restart, without user intervention.
+- [auto] `POST /clients/{id}/actions` delivers the `Action` to that client's
+  action bus (integration test with a headless client and a mock `Player`).
+- [auto] `default` targets the most recently active client; an unknown client
+  id returns `404`; a malformed action returns `400` with a useful message.
+- [auto] `GET /events` delivers `ChannelChanged` and `NowPlaying` within one
+  second of the change.
+- [auto] Action and event routes require the bearer token when one is
+  configured.
+- [auto] Every `Action` and `Event` variant appears in `openapi.json` with its
+  JSON shape, and a round-trip serialization test covers each variant.
+- [auto] Every action the keyboard can trigger is also reachable via the API
+  (a test enumerates `Action` variants against the relay).
+- [manual] `curl -X POST .../clients/default/actions -d '{"action":"channel_up"}'`
+  changes channel on a running desktop client.
+- [manual] Interleaving keyboard and HTTP actions rapidly never leaves the UI
+  or Tuner in a stuck state.
+- [manual] `examples/` contains a working shell script that sends actions and
+  one that tails `/events`.
+
+### M7 — HDMI-CEC input
+
+`marathon-input-cec` via libcec, behind the `input-cec` feature. Develop on a
+Raspberry Pi (native CEC) or a desktop with a Pulse-Eight USB adapter.
+
+Behavior follows the product principle: Marathon is a polite guest on input 4.
+
+- Registers as a playback device with OSD name "Marathon".
+- **Never requests active source on its own** at startup or wake
+  (`cec.claim_on_start = false`), so it never pulls the TV away from input 1.
+- When the TV switches to Marathon's input, resume playback
+  (`cec.resume_on_select = true`). When the TV switches away or enters
+  standby, pause, report progress, and emit `Standby`.
+- Never sends standby or power-on to the TV unless configured to.
+- Remote keys map to `Action`s: D-pad → `Navigate`, OK → `Select`,
+  Back/Return → `Back`, Channel up/down, digits, play/pause/stop, and
+  Info/Guide where the TV forwards them. Colour buttons are user-mappable.
+
+**Complete when:**
+- [auto] CEC key code → `Action` mapping is unit tested without hardware.
+- [auto] Lifecycle logic (switched to us, switched away, TV standby) is tested
+  against a mock CEC adapter.
+- [auto] The crate builds and its tests run in CI without libcec hardware;
+  `marathon-desktop` builds with and without the `input-cec` feature.
+- [manual] Marathon appears as "Marathon" in the TV's input or device list.
+- [manual] Turning the TV on with Marathon running does **not** switch the TV
+  away from whatever input it was on.
+- [manual] Switching the TV to Marathon's input resumes playback, and switching
+  away pauses it, on any TV that reports the routing change.
+- [manual] TV standby pauses playback and the channel resumes at the right
+  position afterward.
+- [manual] The TV remote's D-pad, OK, Back, channel, and play/pause buttons all
+  control Marathon, including navigating the guide.
+- [manual] Unplugging the HDMI cable or CEC adapter does not crash the client,
+  and CEC recovers when it's reconnected.
+
+### M8 — Jellyfin source
 
 Catalog from the Jellyfin API (shows, seasons, episodes, durations); the
 server proxies streams with `Range` pass-through.
@@ -543,7 +742,7 @@ server proxies streams with `Range` pass-through.
   rather than a hang, and filesystem channels keep working.
 - [manual] Rescanning picks up episodes added in Jellyfin.
 
-### M7 — macOS
+### M9 — macOS
 
 Desktop client builds and runs on macOS against Homebrew libmpv.
 
@@ -551,7 +750,7 @@ Desktop client builds and runs on macOS against Homebrew libmpv.
 - [auto] CI builds and tests the workspace on macOS (Apple Silicon runner).
 - [auto] A script produces a `.app` bundle with libmpv and its dependencies
   bundled and their paths rewritten, so it runs on a Mac without Homebrew.
-- [manual] Every M3, M4, and M5 manual criterion passes on macOS.
+- [manual] Every M3, M4, M5, and M6 manual criterion passes on macOS.
 - [manual] HiDPI: video and overlay render at native resolution on a Retina
   display, not upscaled or quarter-sized.
 - [manual] Fullscreen uses native macOS fullscreen and behaves correctly
@@ -561,7 +760,7 @@ Desktop client builds and runs on macOS against Homebrew libmpv.
 - [manual] The bundle launches from Finder (after the usual unsigned-app
   approval) with no terminal.
 
-### M8 — Android client
+### M10 — Android client
 
 Kotlin + Jetpack Compose (Compose for TV for the 10-foot UI), libmpv from the
 mpv-android build, API client generated from `openapi.json`. Gets its own
@@ -579,6 +778,8 @@ planning doc before implementation starts.
 - [manual] On an Android phone, touch controls provide the same actions.
 - [manual] Channel switching, resume, and auto-advance pass the M3 manual
   criteria against a networked `marathond`.
+- [manual] The Android client registers over `/clients/connect` and responds
+  to relayed actions exactly as the desktop client does (M6 criteria).
 - [manual] A file Android's native player can't decode (e.g. 10-bit HEVC with
   PGS subtitles) plays correctly with subtitles.
 - [manual] Watching a channel on desktop, then tuning to it on Android, resumes
@@ -588,19 +789,24 @@ planning doc before implementation starts.
 
 ### After the MVP (not now)
 
-Native SMB/NFS sources (for servers that cannot mount shares, e.g. the
-appliance), embedded server on Android via `cargo-ndk`, phone remote
-(server relays commands to clients over WebSocket), HDMI-CEC via libcec,
-mDNS discovery, stats views, search, a channel editor UI, multiple profiles,
-content fingerprinting to survive file moves, server-side transcoding.
+Example adapters over the M6 API, each a separate small program: a phone
+remote web page, an MCP server for AI agents, a Home Assistant integration,
+an MQTT bridge. Also: native SMB/NFS sources (for servers that cannot mount
+shares, e.g. the appliance), embedded server on Android via `cargo-ndk`, a
+libinput `InputSource` and DRM/KMS `Surface` for the appliance (§13), optional
+loudness normalization across items (background TV should not jump in volume
+between episodes), a sleep timer, mDNS discovery, stats views, search, a
+channel editor UI, multiple profiles, content fingerprinting to survive file
+moves, server-side transcoding.
 
 ---
 
 ## 11. Non-goals for the MVP
 
 No transcoding. No multi-user or accounts (a single bearer token at most). No
-native SMB/NFS. No YouTube integration. No EPG with times. No remote control
-from phones. No Windows build (keep code portable, but do not test it yet).
+native SMB/NFS. No YouTube integration. No EPG with times. No phone remote UI
+(the action API exists; front-ends for it come later). No in-process plugin
+system. No Windows build (keep code portable, but do not test it yet).
 
 ---
 
@@ -609,8 +815,32 @@ from phones. No Windows build (keep code portable, but do not test it yet).
 | Decision | Default | Revisit when |
 |---|---|---|
 | Overlay UI toolkit | egui | If the 10-foot look needs more than egui gives easily; the overlay is isolated so it can be swapped for a custom GL renderer or another toolkit |
-| libmpv bindings | Decided in M3: hand-written declarations in `marathon-mpv` (no `bindgen`, so no libclang). `libmpv2` was LGPL-2.1, panicked inside FFI callbacks, and allocated per frame; the needed surface is ~20 functions | If the needed surface grows a lot |
+| libmpv bindings | `libmpv2` crate if suitable, else own `bindgen` | M3 start |
 | Progress report interval | 5s | If DB growth matters |
 | Finished threshold | `max(30s, 2%)` from end | After living with it; credits vary |
 | Resume rewind | 5s | Personal taste |
+| CEC claims active source on start | Off | Never by default; it's input 4 |
+| CEC resumes when TV switches to Marathon | On | If some TVs report routing changes unreliably |
 | Project license | MIT OR Apache-2.0 | Before publishing |
+
+---
+
+## 13. Appliance direction (not in scope; shapes today's design)
+
+The long-term goal is a small box that plugs into a TV and is controlled
+entirely by the TV remote over HDMI-CEC. Planned path, modelled on LibreELEC:
+
+1. **Kiosk recipe.** Stock minimal Debian, a systemd unit running the `cage`
+   kiosk compositor with `marathon-desktop --embedded` inside it. No custom
+   distro; documentation plus a setup script.
+2. **Image builder.** A Buildroot-based build producing per-board images
+   (generic x86_64 and Raspberry Pi first): systemd, read-only squashfs root,
+   separate data partition, A/B updates (e.g. RAUC), boot splash from
+   bootloader to first frame, no visible Linux.
+3. **Bare-metal display.** A DRM/KMS `Surface` (GBM + EGL) and libinput
+   `InputSource` replace cage, enabling refresh-rate matching, HDR output, and
+   faster boot. Audio goes straight to HDMI via ALSA for bitstream passthrough.
+
+What this requires of the MVP is already in the plan: pluggable input
+(§9), winit kept at the edge (§9 render loop), CEC as an ordinary
+`InputSource` (M7), and the "polite input 4" CEC defaults.
