@@ -826,7 +826,7 @@ Desktop client builds and runs on macOS against Homebrew libmpv.
 
 Kotlin + Jetpack Compose (Compose for TV for the 10-foot UI), libmpv from the
 mpv-android build, API client generated from `openapi.json`. Gets its own
-planning doc before implementation starts.
+planning doc before implementation starts: [`docs/ANDROID.md`](docs/ANDROID.md).
 
 **Complete when:**
 - [auto] The Kotlin API client is generated from the server's `openapi.json` by
