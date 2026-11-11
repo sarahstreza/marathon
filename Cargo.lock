@@ -1944,8 +1944,10 @@ dependencies = [
 name = "marathon-input-cec"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "marathon-api",
  "marathon-client",
+ "pkg-config",
  "serde_json",
  "thiserror 2.0.21",
  "tracing",

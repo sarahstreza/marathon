@@ -1,6 +1,6 @@
 //! The boundary between Marathon and a CEC implementation: what an adapter
 //! must do ([`CecAdapter`]) and what it reports ([`CecEvent`]). The real
-//! one, over libcec, is to come; tests use a mock.
+//! one is [`LibCec`](crate::LibCec) (feature `libcec`); tests use a mock.
 
 use std::sync::mpsc::Sender;
 

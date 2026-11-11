@@ -1,12 +1,13 @@
 [package]
 name = "marathon-input-cec"
-description = "HDMI-CEC input for Marathon: TV remote keys and input switching"
+description = "HDMI-CEC input for Marathon: TV remote keys and input switching (libcec behind the `libcec` feature)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -19,3 +20,15 @@ marathon-client = { workspace = true, default-features = false }
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[build-dependencies]
+# Compile the C shim against the installed libcec headers (feature
+# `libcec` only).
+cc = { workspace = true, optional = true }
+pkg-config = { workspace = true, optional = true }
+
+[features]
+# The real CEC adapter, through the system libcec (libcec-devel,
+# libcec-dev, or `brew install libcec`; any version from 4 on). Without it
+# the crate is the hardware-independent logic and the adapter trait.
+libcec = ["dep:cc", "dep:pkg-config"]

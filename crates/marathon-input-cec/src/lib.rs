@@ -2,8 +2,9 @@
 //! controls Marathon, and switching the TV's input pauses and resumes it.
 //!
 //! [`CecSource`] is an [`InputSource`](marathon_client::input::InputSource)
-//! like the keyboard. It runs a [`CecAdapter`] and turns what happens on
-//! the CEC bus into actions:
+//! like the keyboard. It runs a [`CecAdapter`] (the real one is [`LibCec`],
+//! behind the `libcec` feature) and turns what happens on the CEC bus into
+//! actions:
 //!
 //! - [`keys`]: remote keys to actions (D-pad, OK, Back, channel, digits,
 //!   play controls, Info/Guide, user-mappable colour buttons).
@@ -16,11 +17,13 @@
 //! become the active source (so turning the TV on never pulls it away
 //! from input 1), and never powers the TV on or off.
 //!
-//! All of this is independent of libcec and hardware, and tested against a
-//! mock adapter.
+//! Everything but [`LibCec`] is independent of libcec and hardware, and
+//! tested against a mock adapter.
 
 pub mod adapter;
 pub mod keys;
+#[cfg(feature = "libcec")]
+mod libcec;
 pub mod lifecycle;
 pub mod source;
 
@@ -28,6 +31,8 @@ use std::time::Duration;
 
 pub use adapter::{CecAdapter, CecError, CecEvent, EventSender};
 pub use keys::{ColourButtons, parse_action};
+#[cfg(feature = "libcec")]
+pub use libcec::LibCec;
 pub use source::CecSource;
 
 /// How Marathon appears and behaves on the CEC bus.
