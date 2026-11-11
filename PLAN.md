@@ -308,10 +308,10 @@ via `http-header-fields`).
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
 | GET | `/history?limit=` | Recent events, newest first |
 | POST | `/library/rescan` | Rescan all sources |
-| GET | `/clients` | Connected clients, with what each is playing |
-| GET (WebSocket) | `/clients/connect` | A client's control channel: server pushes relayed `Action`s, client pushes `Event`s |
-| POST | `/clients/{id}/actions` | Relay an `Action` to a client. `{id}` may be `default` (the most recently active client) |
-| GET | `/events` | Server-Sent Events stream of all client and channel events |
+| GET | `/clients` | Connected clients, most recently active first, with what each is playing |
+| GET (WebSocket) | `/clients/connect` | A client's control channel: server pushes relayed `Action`s, client pushes `Event`s, each a JSON text message. Needs `X-Marathon-Client`; reconnecting replaces the old connection |
+| POST | `/clients/{id}/actions` | Relay an `Action` to a client → `202 {client_id}`. `{id}` may be `default` (the most recently active client: last to connect or send an event; reserved, so no client may use it as its ID). The body is JSON whatever its `Content-Type`, so a bare `curl -d` works |
+| GET | `/events` | Server-Sent Events stream of all client events: `event:` is the event's name, `data:` a `RelayedEvent` (the event's fields plus `client_id` and `ts_ms`) |
 | GET | `/openapi.json` | OpenAPI document |
 
 Clients identify themselves with an `X-Marathon-Client` header (a UUID generated
@@ -410,8 +410,15 @@ Any number run at once. Each lives behind a cargo feature (`input-keyboard`,
 
 **Remote adapters** go through the server, since it's the network-facing
 process. Each client keeps a WebSocket to the server (reconnecting with
-backoff); `POST /clients/{id}/actions` relays an `Action` to it, and the client
-publishes its `Event`s back up the same socket for `GET /events`.
+backoff: 0.5s doubling to 30s); `POST /clients/{id}/actions` relays an
+`Action` to it, and the client publishes its `Event`s back up the same socket
+for `GET /events`. On the client, the socket is just another `InputSource`
+(`remote`, behind the `remote` feature). Events are not queued while
+disconnected; instead, on every (re)connect the client re-sends the events
+describing its current state (`NowPlaying`, then `Paused` or `Standby` if
+so), so `GET /clients` is right again after a server restart. The relay is
+in-memory; shutting the server down closes control channels and event
+streams rather than waiting out the shutdown grace period.
 
 **No in-process plugin ABI.** Rust has no stable ABI, and dynamically loaded
 plugins are a maintenance trap. Third-party extensions are separate programs

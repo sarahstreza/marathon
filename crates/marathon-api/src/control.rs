@@ -129,15 +129,13 @@ pub enum Event {
     },
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::{Value, json};
-
-    use super::*;
-
-    /// One of each action. The `match` makes this fail to compile when a
-    /// variant is added without being listed.
-    fn every_action() -> Vec<Action> {
+impl Action {
+    /// One value of every variant (and every [`Direction`]), for tests,
+    /// documentation, and anything that must cover the whole set, such as
+    /// checking that each action can be relayed. Exhaustive by
+    /// construction: adding a variant without listing it here fails to
+    /// compile.
+    pub fn examples() -> Vec<Action> {
         let all = vec![
             Action::ChannelUp,
             Action::ChannelDown,
@@ -173,6 +171,8 @@ mod tests {
             Action::Wake,
             Action::Quit,
         ];
+        // Not a runtime check: the exhaustive `match` is what makes a new
+        // variant a compile error here until it is added to the list.
         for a in &all {
             match a {
                 Action::ChannelUp
@@ -200,40 +200,70 @@ mod tests {
         all
     }
 
-    fn every_event() -> Vec<Event> {
+    /// The variant's name as it appears in JSON (`channel_up`).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::ChannelUp => "channel_up",
+            Action::ChannelDown => "channel_down",
+            Action::GoToChannel { .. } => "go_to_channel",
+            Action::GoToChannelId { .. } => "go_to_channel_id",
+            Action::TogglePause => "toggle_pause",
+            Action::Play => "play",
+            Action::Pause => "pause",
+            Action::SeekRelative { .. } => "seek_relative",
+            Action::NextItem => "next_item",
+            Action::PreviousItem => "previous_item",
+            Action::Navigate { .. } => "navigate",
+            Action::Select => "select",
+            Action::Back => "back",
+            Action::ShowInfo => "show_info",
+            Action::ToggleGuide => "toggle_guide",
+            Action::ToggleSubtitles => "toggle_subtitles",
+            Action::ToggleFullscreen => "toggle_fullscreen",
+            Action::Standby => "standby",
+            Action::Wake => "wake",
+            Action::Quit => "quit",
+        }
+    }
+}
+
+impl Event {
+    /// One value of every variant; see [`Action::examples`].
+    pub fn examples() -> Vec<Event> {
         let all = vec![
             Event::NowPlaying {
-                channel_id: "c".into(),
+                channel_id: "office".into(),
                 channel_number: 1,
-                item_id: "i".into(),
-                title: "T".into(),
-                position_ms: 5,
+                item_id: "0190a1b2-0000-7000-8000-000000000001".into(),
+                title: "The Office · S03E14 · The Injury".into(),
+                position_ms: 5000,
             },
             Event::ChannelChanged {
-                channel_id: "c".into(),
+                channel_id: "office".into(),
                 channel_number: 1,
-                channel_name: "C".into(),
+                channel_name: "The Office".into(),
             },
             Event::Paused {
-                channel_id: "c".into(),
-                item_id: "i".into(),
-                position_ms: 5,
+                channel_id: "office".into(),
+                item_id: "0190a1b2-0000-7000-8000-000000000001".into(),
+                position_ms: 65_000,
             },
             Event::Resumed {
-                channel_id: "c".into(),
-                item_id: "i".into(),
-                position_ms: 5,
+                channel_id: "office".into(),
+                item_id: "0190a1b2-0000-7000-8000-000000000001".into(),
+                position_ms: 65_000,
             },
             Event::ItemEnded {
-                channel_id: "c".into(),
-                item_id: "i".into(),
+                channel_id: "office".into(),
+                item_id: "0190a1b2-0000-7000-8000-000000000001".into(),
             },
             Event::Standby,
             Event::Wake,
             Event::Error {
-                message: "m".into(),
+                message: "cannot play TV/a.mkv on channel 1: file not found".into(),
             },
         ];
+        // As in `Action::examples`: a compile-time completeness check.
         for e in &all {
             match e {
                 Event::NowPlaying { .. }
@@ -249,13 +279,99 @@ mod tests {
         all
     }
 
+    /// The variant's name as it appears in JSON (`now_playing`), also used
+    /// as the Server-Sent Events `event:` field by `GET /events`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Event::NowPlaying { .. } => "now_playing",
+            Event::ChannelChanged { .. } => "channel_changed",
+            Event::Paused { .. } => "paused",
+            Event::Resumed { .. } => "resumed",
+            Event::ItemEnded { .. } => "item_ended",
+            Event::Standby => "standby",
+            Event::Wake => "wake",
+            Event::Error { .. } => "error",
+        }
+    }
+}
+
+/// An [`Event`] as relayed by the server on `GET /events`: the event's own
+/// fields, plus which client sent it and when the server received it.
+///
+/// ```
+/// # use marathon_api::{Event, RelayedEvent};
+/// let relayed = RelayedEvent { client_id: "c1".into(), ts_ms: 1, event: Event::Standby };
+/// assert_eq!(
+///     serde_json::to_string(&relayed).unwrap(),
+///     r#"{"client_id":"c1","ts_ms":1,"event":"standby"}"#
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RelayedEvent {
+    /// The `X-Marathon-Client` ID of the client the event came from.
+    pub client_id: String,
+    /// When the server received it, in milliseconds since the Unix epoch.
+    pub ts_ms: i64,
+    #[serde(flatten)]
+    pub event: Event,
+}
+
+/// What a connected client is playing, as far as its events tell.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientPlaying {
+    pub channel_id: String,
+    pub channel_number: u32,
+    pub item_id: String,
+    /// Human-readable description, e.g. `Show · S03E14 · The Injury`.
+    pub title: String,
+}
+
+/// One entry of `GET /clients`: a client connected to the control channel
+/// (`/clients/connect`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientInfo {
+    /// The client's `X-Marathon-Client` ID; use it in
+    /// `POST /clients/{id}/actions`.
+    pub id: String,
+    /// When this connection was opened, in milliseconds since the Unix
+    /// epoch.
+    pub connected_at_ms: i64,
+    /// When the client last connected or sent an event. The most recent
+    /// one is the `default` client.
+    pub last_active_ms: i64,
+    /// Whether this is the client `default` currently refers to.
+    pub is_default: bool,
+    /// What it is playing; `None` before its first `now_playing` event, or
+    /// while in standby.
+    pub playing: Option<ClientPlaying>,
+    /// Whether playback is paused.
+    pub paused: bool,
+    /// Whether the client is in standby.
+    pub standby: bool,
+}
+
+/// Response to `POST /clients/{id}/actions`: the action was handed to the
+/// client's control channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ActionAccepted {
+    /// The client the action went to (useful when the request said
+    /// `default`).
+    pub client_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
     fn is_snake_case(s: &str) -> bool {
         !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c == '_')
     }
 
     #[test]
     fn every_action_round_trips_with_a_snake_case_tag() {
-        for action in every_action() {
+        for action in Action::examples() {
             let value = serde_json::to_value(&action).unwrap();
             let tag = value["action"].as_str().unwrap();
             assert!(is_snake_case(tag), "{tag}");
@@ -265,7 +381,7 @@ mod tests {
 
     #[test]
     fn every_event_round_trips_with_a_snake_case_tag() {
-        for event in every_event() {
+        for event in Event::examples() {
             let value = serde_json::to_value(&event).unwrap();
             let tag = value["event"].as_str().unwrap();
             assert!(is_snake_case(tag), "{tag}");
@@ -300,6 +416,37 @@ mod tests {
         })
         .unwrap();
         assert_eq!(value, json!({"event": "error", "message": "boom"}));
+    }
+
+    #[test]
+    fn names_match_the_json_tags() {
+        for action in Action::examples() {
+            assert_eq!(
+                serde_json::to_value(&action).unwrap()["action"],
+                action.name()
+            );
+        }
+        for event in Event::examples() {
+            assert_eq!(serde_json::to_value(&event).unwrap()["event"], event.name());
+        }
+    }
+
+    #[test]
+    fn relayed_events_flatten_and_round_trip() {
+        for event in Event::examples() {
+            let relayed = RelayedEvent {
+                client_id: "c".into(),
+                ts_ms: 42,
+                event: event.clone(),
+            };
+            let value = serde_json::to_value(&relayed).unwrap();
+            assert_eq!(value["client_id"], "c");
+            assert_eq!(value["event"], event.name());
+            assert_eq!(
+                serde_json::from_value::<RelayedEvent>(value).unwrap(),
+                relayed
+            );
+        }
     }
 
     #[test]

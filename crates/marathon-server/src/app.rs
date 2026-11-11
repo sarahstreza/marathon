@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use crate::catalog;
 use crate::config::{Config, ConfigError, SourceConfig, expand_home};
 use crate::db::{ChannelRow, Db, OpenError, SourceDef};
+use crate::relay::Relay;
 
 /// File name of the SQLite database inside `data_dir`.
 pub const DATABASE_FILE: &str = "marathon.db";
@@ -54,6 +55,8 @@ pub(crate) struct Inner {
     pub(crate) playback: Mutex<()>,
     /// Ensures only one rescan runs at a time.
     pub(crate) scanning: Mutex<()>,
+    /// Connected clients' control channels and the event stream.
+    pub(crate) relay: Relay,
 }
 
 impl App {
@@ -83,6 +86,7 @@ impl App {
                 config,
                 playback: Mutex::new(()),
                 scanning: Mutex::new(()),
+                relay: Relay::new(),
             }),
         };
         let report = app.rescan().await.map_err(StartError::Scan)?;
@@ -98,6 +102,11 @@ impl App {
 
     pub fn config(&self) -> &Config {
         &self.inner.config
+    }
+
+    /// The client relay: control channels and the event stream.
+    pub fn relay(&self) -> &Relay {
+        &self.inner.relay
     }
 
     /// Rescans every source and rebuilds channel membership. Concurrent

@@ -26,6 +26,7 @@ mod error;
 pub mod http;
 pub mod parse;
 mod playback;
+pub mod relay;
 pub mod scan;
 
 use std::future::{Future, IntoFuture};
@@ -108,10 +109,15 @@ impl Server {
     ) -> std::io::Result<()> {
         tracing::info!(addr = %self.local_addr, "serving");
         let (requested, on_request) = tokio::sync::oneshot::channel::<()>();
+        let app = self.app.clone();
         let serve = axum::serve(self.listener, http::router(self.app.clone()))
             .with_graceful_shutdown(async move {
                 shutdown.await;
                 tracing::info!("shutting down");
+                // Control channels and event streams stay open
+                // indefinitely; close them so they do not hold up the
+                // graceful shutdown.
+                app.relay().shut_down();
                 let _ = requested.send(());
             })
             .into_future();

@@ -16,7 +16,13 @@ use utoipa::ToSchema;
 
 mod control;
 
-pub use control::{Action, Direction, Event};
+pub use control::{
+    Action, ActionAccepted, ClientInfo, ClientPlaying, Direction, Event, RelayedEvent,
+};
+
+/// The client ID that `POST /clients/{id}/actions` resolves to the most
+/// recently active connected client.
+pub const DEFAULT_CLIENT: &str = "default";
 
 /// Path prefix of every API route.
 pub const API_PREFIX: &str = "/api/v1";
@@ -305,6 +311,21 @@ pub mod paths {
     /// `GET`: the `index`th sidecar subtitle of an item.
     pub fn subtitle(item_id: &str, index: u32) -> String {
         format!("{API_PREFIX}/subtitles/{item_id}/{index}")
+    }
+
+    /// `GET` (WebSocket): a client's control channel.
+    pub fn clients_connect() -> String {
+        format!("{API_PREFIX}/clients/connect")
+    }
+
+    /// `POST`: relay an action to a client (or to `default`).
+    pub fn client_actions(client_id: &str) -> String {
+        format!("{API_PREFIX}/clients/{client_id}/actions")
+    }
+
+    /// `GET`: the Server-Sent Events stream.
+    pub fn events() -> String {
+        format!("{API_PREFIX}/events")
     }
 }
 

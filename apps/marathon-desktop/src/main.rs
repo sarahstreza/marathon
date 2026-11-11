@@ -14,12 +14,13 @@
 //!
 //! ```text
 //! platform (window, keys, mouse, gamepad) ──► input sources ──Action──► action bus
-//!                                                                         │ route()
+//! server ──WebSocket──► remote ─────────────►                             │ route()
 //!                        ◄── fullscreen / quit ───────────────────────────┤
 //!                                                                         ▼
 //! platform ◄── frames ── renderer ◄── mpv ◄── MpvPlayer ◄───────── tuner thread
 //!                           ▲                                             │
-//!                           └──── overlay ◄── cues, progress, errors ─────┘
+//!                           └──── overlay ◄── cues, progress, errors ─────┤
+//! server ◄──WebSocket── remote ◄── events ────────────────────────────────┘
 //! ```
 //!
 //! - [`platform`]: the main thread's event loop and window; the only code
@@ -57,6 +58,7 @@ use marathon_client::client_id;
 use marathon_client::input::InputSources;
 use marathon_client::keyboard::KeyboardSource;
 use marathon_client::mouse::MouseSource;
+use marathon_client::remote::{RemoteConfig, RemoteSource};
 use marathon_client::tuner::{SystemClock, Tuner, TunerConfig};
 use marathon_mpv::Mpv;
 use marathon_server::config::Config;
@@ -226,6 +228,13 @@ fn main() -> anyhow::Result<()> {
     inputs.start(Box::new(mouse_source), &bus)?;
     #[cfg(feature = "input-gamepad")]
     inputs.start(Box::new(platform::gamepad::GamepadSource::new()), &bus)?;
+    // Remote control through the server: relayed actions arrive on the bus
+    // like any other input, and the tuner's events go back up for
+    // observers (PLAN.md §9 "Remote adapters").
+    let (remote, publisher) = RemoteSource::new(RemoteConfig::for_api(&api));
+    if let Err(err) = inputs.start(Box::new(remote), &bus) {
+        tracing::warn!(%err, "remote control unavailable; carrying on without it");
+    }
 
     let (overlay, overlay_feed) = {
         let window = window.clone();
@@ -244,9 +253,10 @@ fn main() -> anyhow::Result<()> {
     .with_ui_sink(move |cue| cues.send(OverlayMsg::Ui(cue)))
     .with_event_sink(move |event| {
         tracing::debug!(?event, "event");
-        if let marathon_api::Event::Error { message } = event {
-            errors.send(OverlayMsg::Toast(message));
+        if let marathon_api::Event::Error { message } = &event {
+            errors.send(OverlayMsg::Toast(message.clone()));
         }
+        publisher.publish(event);
     });
     let wake = tx.clone();
     let start_channel = args.channel;

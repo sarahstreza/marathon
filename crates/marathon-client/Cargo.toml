@@ -12,10 +12,16 @@ workspace = true
 
 [dependencies]
 marathon-api.workspace = true
+futures-util = { workspace = true, optional = true, features = ["sink"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The control channel (feature `remote`) runs on its own thread with a
+# single-threaded runtime.
+tokio = { workspace = true, optional = true }
+# TLS for `wss://` shares reqwest's rustls (and its crypto provider).
+tokio-tungstenite = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 uuid.workspace = true
 
@@ -23,7 +29,7 @@ uuid.workspace = true
 tempfile.workspace = true
 
 [features]
-default = ["input-keyboard", "input-mouse", "input-gamepad"]
+default = ["input-keyboard", "input-mouse", "input-gamepad", "remote"]
 # Keyboard bindings as an InputSource (the windowing layer feeds it keys).
 input-keyboard = []
 # Mouse wheel and click bindings as an InputSource (fed by the windowing
@@ -32,3 +38,6 @@ input-mouse = []
 # Gamepad button bindings. Only the mapping: the gamepad library and its
 # InputSource live in the app's platform layer (PLAN.md §2 decision 7).
 input-gamepad = []
+# The control channel to the server (PLAN.md §9 "Remote adapters"): an
+# InputSource for actions relayed by the server, and publishing events.
+remote = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite"]

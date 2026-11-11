@@ -9,88 +9,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+mod common;
 
+use common::{Recorder, TestServer};
 use marathon_api::{Action, AdvanceReason, AdvanceRequest, ErrorCode, EventKind, ProgressReport};
 use marathon_client::api::{Api, ApiError, HttpApi};
-use marathon_client::player::{LoadRequest, Player, PlayerError, PlayerEvent};
+use marathon_client::player::PlayerEvent;
 use marathon_client::tuner::{SystemClock, Tuner, TunerConfig};
-use marathon_server::config::Config;
-use marathon_server::embedded::EmbeddedServer;
-use tempfile::TempDir;
-
-const VIDEOS: &[&str] = &[
-    "Show/Season 1/Show - S01E01 - One.mkv",
-    "Show/Season 1/Show - S01E02 - Two.mkv",
-    "Show/Season 1/Show - S01E03 - Three.mkv",
-    "Show/Season 1/Show - S01E03 - Three.en.srt",
-    "Other/Clip A.mkv",
-    "Other/Clip B.mkv",
-];
-
-/// An embedded server over a temp library, stopped on drop.
-struct TestServer {
-    // Declared first so it stops before the directory is deleted.
-    server: EmbeddedServer,
-    _dir: TempDir,
-}
-
-impl TestServer {
-    fn start(token: Option<&str>) -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        for rel in VIDEOS {
-            let path = dir.path().join("lib").join(rel);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, rel.as_bytes()).unwrap();
-        }
-        let config = Config::from_toml_str(&config_toml(dir.path(), token)).unwrap();
-        let server = EmbeddedServer::start(config).unwrap();
-        Self { server, _dir: dir }
-    }
-
-    fn url(&self) -> String {
-        self.server.base_url()
-    }
-
-    fn api(&self, client_id: &str) -> HttpApi {
-        HttpApi::new(&self.url(), None, client_id).unwrap()
-    }
-}
-
-fn config_toml(dir: &Path, token: Option<&str>) -> String {
-    let token = token
-        .map(|t| format!("token = \"{t}\"\n"))
-        .unwrap_or_default();
-    format!(
-        r#"
-[server]
-bind = "127.0.0.1:0"
-data_dir = "{data}"
-{token}
-[[source]]
-id = "lib"
-kind = "filesystem"
-root = "{lib}"
-
-[[channel]]
-id = "show"
-number = 1
-name = "Show"
-items = [{{ source = "lib", path = "Show" }}]
-rule = {{ kind = "ordered" }}
-
-[[channel]]
-id = "other"
-number = 2
-name = "Other"
-items = [{{ source = "lib", path = "Other" }}]
-rule = {{ kind = "ordered" }}
-"#,
-        data = dir.join("data").display(),
-        lib = dir.join("lib").display(),
-    )
-}
 
 #[test]
 fn http_api_round_trips_every_call() {
@@ -202,34 +127,6 @@ fn token_is_sent_when_configured() {
     );
     let api = HttpApi::new(&server.url(), Some("sesame"), "c").unwrap();
     assert_eq!(api.channels().unwrap().len(), 2);
-}
-
-/// Records loads; position is set by the test.
-#[derive(Clone, Default)]
-struct Recorder {
-    loads: Arc<Mutex<Vec<LoadRequest>>>,
-    position: Arc<Mutex<Option<u64>>>,
-}
-
-impl Player for Recorder {
-    fn load(&mut self, request: &LoadRequest) -> Result<(), PlayerError> {
-        self.loads.lock().unwrap().push(request.clone());
-        *self.position.lock().unwrap() = Some(request.start_ms);
-        Ok(())
-    }
-    fn stop(&mut self) {}
-    fn set_paused(&mut self, _: bool) {}
-    fn is_paused(&self) -> bool {
-        false
-    }
-    fn seek_relative(&mut self, _: i32) {}
-    fn position_ms(&self) -> Option<u64> {
-        *self.position.lock().unwrap()
-    }
-    fn duration_ms(&self) -> Option<u64> {
-        Some(1_200_000)
-    }
-    fn toggle_subtitles(&mut self) {}
 }
 
 #[test]
