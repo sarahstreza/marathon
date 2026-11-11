@@ -86,6 +86,8 @@ fn diff(
             episode: parsed.episode.map(i64::from),
             title: parsed.title,
             subtitles_json: serde_json::to_string(&file.subtitles)?,
+            external_id: None,
+            duration_ms: None,
         };
         counts.items_present += 1;
         match by_path.remove(&file.path) {

@@ -112,7 +112,11 @@ impl App {
         let position = to_i64(report.position_ms);
         let db = &self.inner.db;
         db.set_position(channel_id, position, now_ms()).await?;
+        // A duration the catalog provided (Jellyfin's) is authoritative;
+        // clients only fill in durations nobody else knows.
+        let from_catalog = current.external_id.is_some() && current.duration_ms.is_some();
         if let Some(duration) = report.duration_ms.filter(|d| *d > 0)
+            && !from_catalog
             && current.duration_ms != Some(to_i64(duration))
         {
             db.set_duration(&current.id, to_i64(duration)).await?;

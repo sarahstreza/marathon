@@ -10,7 +10,7 @@ use common::{SUBTITLE, TestEnv, VIDEOS};
 use marathon_server::db::ItemRow;
 
 const ITEM_COLUMNS: &str = "SELECT id, source_id, path, size, mtime, show, season, episode, \
-                            title, duration_ms, subtitles_json, missing FROM items";
+                            title, duration_ms, subtitles_json, missing, external_id FROM items";
 
 async fn items(app: &marathon_server::App) -> Vec<ItemRow> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!("{ITEM_COLUMNS} ORDER BY path")))
