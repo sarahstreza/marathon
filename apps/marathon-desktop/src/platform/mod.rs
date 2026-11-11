@@ -4,8 +4,9 @@
 //!
 //! It owns the event loop and the window, gives the
 //! [`Renderer`](crate::renderer::Renderer) a [`Surface`](crate::surface::Surface),
-//! turns key and mouse events into the input sources' own types, and hides
-//! the cursor when the mouse is idle. The rest of the app talks to it only
+//! turns key and mouse events into the input sources' own types, hides the
+//! cursor when the mouse is idle, and (with the `input-gamepad` feature)
+//! runs the gamepad input source. The rest of the app talks to it only
 //! through [`PlatformHandle`] and [`Hooks`].
 //!
 //! The loop:
@@ -21,6 +22,8 @@
 //!   running does it redraw continuously, at the display's refresh rate.
 
 mod cursor;
+#[cfg(feature = "input-gamepad")]
+pub mod gamepad;
 mod gl;
 mod keys;
 

@@ -34,10 +34,11 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # marathon-mpv links the system libmpv, found with pkg-config.
-      - name: Install libmpv (Linux)
+      # marathon-mpv links the system libmpv, found with pkg-config; gilrs
+      # (gamepads, in marathon-desktop) needs libudev on Linux.
+      - name: Install libmpv and libudev (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev libudev-dev
       - name: Install libmpv (macOS)
         if: runner.os == 'macOS'
         run: brew install mpv pkgconf
@@ -51,8 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      # marathon-client has no winit/glutin/gilrs dependency, and winit and
-      # glutin appear only in marathon-desktop's platform module (M3.5).
+      # marathon-client has no winit/glutin/gilrs dependency, and winit,
+      # glutin, and gilrs appear only in marathon-desktop's platform module
+      # (M3.5, M5).
       - run: scripts/check-seams.sh
 
   test-library:

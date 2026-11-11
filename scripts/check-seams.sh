@@ -4,8 +4,9 @@
 #
 # 1. marathon-client does not depend, even transitively, on winit, glutin,
 #    or gilrs (with every feature enabled).
-# 2. winit, glutin, glutin-winit, and raw-window-handle are referenced in
-#    Rust code only inside marathon-desktop's platform module.
+# 2. winit, glutin, glutin-winit, raw-window-handle, and gilrs are
+#    referenced in Rust code only inside marathon-desktop's platform
+#    module.
 #
 # Run from anywhere in the repo. Exits non-zero, listing offenders, on
 # failure. CI runs it.
@@ -27,7 +28,8 @@ fi
 platform_dir='apps/marathon-desktop/src/platform/'
 # Paths and `use`/`extern crate` of the platform crates. Doc comments that
 # merely mention "winit" are fine.
-pattern='\b(winit|glutin|glutin_winit|raw_window_handle)::|^\s*(pub\s+)?(use|extern\s+crate)\s+(winit|glutin|glutin_winit|raw_window_handle)\b'
+crates='winit|glutin|glutin_winit|raw_window_handle|gilrs'
+pattern="\\b($crates)::|^\\s*(pub\\s+)?(use|extern\\s+crate)\\s+($crates)\\b"
 # Tracked and new (unignored) files; -s skips ones deleted but not staged.
 if bad="$(git ls-files --cached --others --exclude-standard -- '*.rs' \
     | grep -v "^$platform_dir" | xargs grep -snE "$pattern" || true)" \
@@ -38,6 +40,6 @@ if bad="$(git ls-files --cached --others --exclude-standard -- '*.rs' \
 fi
 
 if [[ $status -eq 0 ]]; then
-    echo "seams ok: marathon-client is platform-free; winit/glutin confined to $platform_dir"
+    echo "seams ok: marathon-client is platform-free; winit/glutin/gilrs confined to $platform_dir"
 fi
 exit $status

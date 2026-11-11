@@ -13,7 +13,7 @@
 //! How the pieces fit (PLAN.md §9):
 //!
 //! ```text
-//! platform (window, keys, mouse) ─────────► input sources ──Action──► action bus
+//! platform (window, keys, mouse, gamepad) ──► input sources ──Action──► action bus
 //!                                                                         │ route()
 //!                        ◄── fullscreen / quit ───────────────────────────┤
 //!                                                                         ▼
@@ -23,7 +23,7 @@
 //! ```
 //!
 //! - [`platform`]: the main thread's event loop and window; the only code
-//!   that knows about winit/glutin.
+//!   that knows about winit/glutin/gilrs.
 //! - [`renderer`]: draws mpv's video and the [`overlay`] into any
 //!   [`surface::Surface`].
 //! - [`overlay`]: the channel banner, guide, and error toasts (egui).
@@ -224,6 +224,8 @@ fn main() -> anyhow::Result<()> {
     inputs.start(Box::new(keyboard), &bus)?;
     let (mouse_source, mouse) = MouseSource::new();
     inputs.start(Box::new(mouse_source), &bus)?;
+    #[cfg(feature = "input-gamepad")]
+    inputs.start(Box::new(platform::gamepad::GamepadSource::new()), &bus)?;
 
     let (overlay, overlay_feed) = {
         let window = window.clone();

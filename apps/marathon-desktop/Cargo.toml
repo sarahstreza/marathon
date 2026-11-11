@@ -21,6 +21,7 @@ clap.workspace = true
 dirs.workspace = true
 egui.workspace = true
 egui_glow.workspace = true
+gilrs = { workspace = true, optional = true }
 glow.workspace = true
 glutin.workspace = true
 glutin-winit.workspace = true
@@ -31,3 +32,8 @@ winit.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[features]
+default = ["input-gamepad"]
+# Gamepad input through gilrs (needs libudev on Linux).
+input-gamepad = ["dep:gilrs", "marathon-client/input-gamepad"]

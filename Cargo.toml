@@ -29,6 +29,9 @@ dirs = "7.0.0"
 # `default_fonts` (no longer a default feature); without it no text draws.
 egui = { version = "0.37.0", features = ["default_fonts"] }
 egui_glow = { version = "0.37.0", default-features = false }
+# Gamepads (M5); used only in marathon-desktop's platform module. Needs
+# libudev on Linux.
+gilrs = "0.11.2"
 # Windowing and GL. egui pins these: egui_glow 0.37 needs glow ^0.17 (and
 # egui-winit 0.37, unused, winit ^0.30.13), and glutin-winit 0.5 pairs
 # glutin 0.32 with winit 0.30. Upgrade them together, egui first.
