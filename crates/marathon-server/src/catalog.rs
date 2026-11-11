@@ -6,32 +6,78 @@ use std::collections::{HashMap, HashSet};
 use marathon_api::ScanReport;
 
 use crate::Error;
-use crate::config::{Config, SourceConfig, expand_home};
+use crate::config::Config;
 use crate::db::{Db, ScanChanges, ScannedItem};
-use crate::parse::parse_path;
-use crate::scan::{ScannedFile, scan_filesystem};
+use crate::parse::{ParsedName, parse_path};
+use crate::scan::{ScannedFile, SidecarSubtitle, scan_filesystem};
+use crate::sources::{Source, Sources};
+
+/// An item a source reports, before it is matched against the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    /// Path within the source, `/`-separated; unique within the source.
+    pub path: String,
+    pub size: u64,
+    /// Modification time in milliseconds since the Unix epoch (0 if
+    /// unknown).
+    pub mtime_ms: i64,
+    pub subtitles: Vec<SidecarSubtitle>,
+    /// Show, season, episode, and title, if the source knows them;
+    /// otherwise they are parsed from `path`.
+    pub metadata: Option<ParsedName>,
+    /// The source's own ID for the item, if it has one.
+    pub external_id: Option<String>,
+    /// The duration, if the source knows it.
+    pub duration_ms: Option<i64>,
+}
+
+impl From<ScannedFile> for Found {
+    fn from(file: ScannedFile) -> Self {
+        Self {
+            path: file.path,
+            size: file.size,
+            mtime_ms: file.mtime_ms,
+            subtitles: file.subtitles,
+            metadata: None,
+            external_id: None,
+            duration_ms: None,
+        }
+    }
+}
+
+/// Lists what one source holds.
+async fn list(id: &str, source: &Source) -> Result<Vec<Found>, String> {
+    match source {
+        Source::Filesystem { root } => {
+            let root = root.clone();
+            let started = std::time::Instant::now();
+            let result = tokio::task::spawn_blocking(move || scan_filesystem(&root))
+                .await
+                .map_err(|e| e.to_string())?;
+            tracing::debug!(source = %id, elapsed = ?started.elapsed(), "walked source");
+            result
+                .map(|files| files.into_iter().map(Found::from).collect())
+                .map_err(|e| e.to_string())
+        }
+        Source::Jellyfin(client) => client.scan().await.map_err(|e| e.to_string()),
+    }
+}
 
 /// Scans every configured source, updates `items`, and rebuilds channel
 /// membership.
 ///
-/// A source that cannot be scanned at all (its root is unreadable) is
-/// reported in [`ScanReport::errors`] and its items are left as they were.
-/// Within a readable source, files that are gone are marked missing and
-/// files that come back are unmarked.
-pub async fn rescan(db: &Db, config: &Config) -> Result<ScanReport, Error> {
+/// A source that cannot be scanned at all (its root is unreadable, or its
+/// server unreachable) is reported in [`ScanReport::errors`] and its items
+/// are left as they were. Within a source that could be scanned, items
+/// that are gone are marked missing and items that come back are unmarked.
+pub async fn rescan(db: &Db, config: &Config, sources: &Sources) -> Result<ScanReport, Error> {
     let mut report = ScanReport::default();
     for source in &config.sources {
         let id = source.id().to_owned();
-        let files = match source {
-            SourceConfig::Filesystem { root, .. } => {
-                let root = expand_home(root);
-                let started = std::time::Instant::now();
-                let result = tokio::task::spawn_blocking(move || scan_filesystem(&root)).await?;
-                tracing::debug!(source = %id, elapsed = ?started.elapsed(), "walked source");
-                result
-            }
+        let Some(runtime) = sources.get(&id) else {
+            continue;
         };
-        let files = match files {
+        let files = match list(&id, runtime).await {
             Ok(files) => files,
             Err(err) => {
                 tracing::warn!(source = %id, error = %err, "skipping source that cannot be scanned");
@@ -65,7 +111,7 @@ pub async fn rescan(db: &Db, config: &Config) -> Result<ScanReport, Error> {
 /// Works out the database changes that bring one source's items in line
 /// with a scan.
 fn diff(
-    files: &[ScannedFile],
+    files: &[Found],
     existing: Vec<crate::db::ItemRow>,
 ) -> Result<(ScanChanges, ScanReport), Error> {
     let mut by_path: HashMap<String, crate::db::ItemRow> = existing
@@ -76,7 +122,10 @@ fn diff(
     let mut counts = ScanReport::default();
 
     for file in files {
-        let parsed = parse_path(&file.path);
+        let parsed = file
+            .metadata
+            .clone()
+            .unwrap_or_else(|| parse_path(&file.path));
         let item = ScannedItem {
             path: file.path.clone(),
             size: i64::try_from(file.size).unwrap_or(i64::MAX),
@@ -86,6 +135,8 @@ fn diff(
             episode: parsed.episode.map(i64::from),
             title: parsed.title,
             subtitles_json: serde_json::to_string(&file.subtitles)?,
+            external_id: file.external_id.clone(),
+            duration_ms: file.duration_ms,
         };
         counts.items_present += 1;
         match by_path.remove(&file.path) {
@@ -101,7 +152,9 @@ fn diff(
                     || row.season != item.season
                     || row.episode != item.episode
                     || row.title != item.title
-                    || row.subtitles_json != item.subtitles_json;
+                    || row.subtitles_json != item.subtitles_json
+                    || row.external_id != item.external_id
+                    || (item.duration_ms.is_some() && row.duration_ms != item.duration_ms);
                 if row.missing {
                     counts.restored += 1;
                 } else if file_changed || metadata_changed {

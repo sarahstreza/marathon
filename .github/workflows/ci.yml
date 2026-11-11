@@ -35,16 +35,25 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # marathon-mpv links the system libmpv, found with pkg-config; gilrs
-      # (gamepads, in marathon-desktop) needs libudev on Linux.
-      - name: Install libmpv and libudev (Linux)
+      # (gamepads, in marathon-desktop) needs libudev on Linux; the
+      # optional HDMI-CEC input (M7) needs libcec, whose pkg-config file
+      # requires p8-platform's (not pulled in without recommends).
+      - name: Install libmpv, libudev, and libcec (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev libudev-dev
-      - name: Install libmpv (macOS)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev libudev-dev libcec-dev libp8-platform-dev
+      - name: Install libmpv and libcec (macOS)
         if: runner.os == 'macOS'
-        run: brew install mpv pkgconf
+        run: brew install mpv libcec pkgconf
       - run: cargo build --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The default build leaves HDMI-CEC out; check the desktop app with
+      # it too (M7). Its tests need no CEC hardware.
+      - name: With the input-cec feature
+        run: |
+          features=marathon-desktop/input-cec,marathon-input-cec/libcec
+          cargo clippy -p marathon-desktop -p marathon-input-cec --all-targets --locked --features $features -- -D warnings
+          cargo test -p marathon-desktop -p marathon-input-cec --locked --features $features
 
   seams:
     name: platform seams

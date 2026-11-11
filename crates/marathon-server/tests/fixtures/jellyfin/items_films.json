@@ -1,0 +1,62 @@
+{
+ "Items": [
+  {
+   "Name": "Heat",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "4ea7199500000000cccccccccccccccc",
+   "CanDelete": false,
+   "SortName": "heat",
+   "PremiereDate": "1995-12-15T00:00:00.0000000Z",
+   "ProductionYear": 1995,
+   "OfficialRating": "R",
+   "RunTimeTicks": 102000000000,
+   "IsFolder": false,
+   "Type": "Movie",
+   "Path": "/media/more-films/Heat (1995)/Heat (1995).mkv",
+   "VideoType": "VideoFile",
+   "LocationType": "FileSystem",
+   "MediaType": "Video",
+   "MediaSources": [
+    {
+     "Protocol": "File",
+     "Id": "4ea7199500000000cccccccccccccccc",
+     "Path": "/media/more-films/Heat (1995)/Heat (1995).mkv",
+     "Container": "mkv",
+     "Size": 1400,
+     "Name": "Heat",
+     "RunTimeTicks": 102000000000
+    }
+   ]
+  },
+  {
+   "Name": "Alien",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "a11e197900000000cccccccccccccccc",
+   "CanDelete": false,
+   "SortName": "alien",
+   "PremiereDate": "1979-12-15T00:00:00.0000000Z",
+   "ProductionYear": 1979,
+   "OfficialRating": "R",
+   "RunTimeTicks": 70020000000,
+   "IsFolder": false,
+   "Type": "Movie",
+   "Path": "/media/films/Alien (1979).mp4",
+   "VideoType": "VideoFile",
+   "LocationType": "FileSystem",
+   "MediaType": "Video",
+   "MediaSources": [
+    {
+     "Protocol": "File",
+     "Id": "a11e197900000000cccccccccccccccc",
+     "Path": "/media/films/Alien (1979).mp4",
+     "Container": "mkv",
+     "Size": 1500,
+     "Name": "Alien",
+     "RunTimeTicks": 70020000000
+    }
+   ]
+  }
+ ],
+ "TotalRecordCount": 2,
+ "StartIndex": 0
+}

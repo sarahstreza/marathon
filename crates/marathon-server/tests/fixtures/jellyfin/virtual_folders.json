@@ -1,0 +1,26 @@
+[
+  {
+    "Name": "Shows",
+    "Locations": ["/media/tv"],
+    "CollectionType": "tvshows",
+    "LibraryOptions": {"Enabled": true, "EnablePhotos": true, "PathInfos": [{"Path": "/media/tv"}]},
+    "ItemId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "PrimaryImageItemId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "RefreshStatus": "Idle"
+  },
+  {
+    "Name": "Films",
+    "Locations": ["/media/films", "/media/more-films"],
+    "CollectionType": "movies",
+    "LibraryOptions": {"Enabled": true},
+    "ItemId": "f00df00df00df00df00df00df00df00d",
+    "RefreshStatus": "Idle"
+  },
+  {
+    "Name": "Music",
+    "Locations": ["/media/music"],
+    "CollectionType": "music",
+    "ItemId": "0123456789abcdef0123456789abcdef",
+    "RefreshStatus": "Idle"
+  }
+]

@@ -1,5 +1,5 @@
-//! Marathon server library: config, catalog, sources, database, HTTP routes,
-//! and media streaming. Used by `marathond` and by the desktop client's
+//! Marathon server library: config, catalog, sources (filesystem and
+//! Jellyfin), database, HTTP routes, and media streaming. Used by `marathond` and by the desktop client's
 //! embedded mode.
 //!
 //! The usual entry point is [`Server`]. To run a server inside another
@@ -24,10 +24,12 @@ pub mod db;
 pub mod embedded;
 mod error;
 pub mod http;
+pub mod jellyfin;
 pub mod parse;
 mod playback;
 pub mod relay;
 pub mod scan;
+pub mod sources;
 
 use std::future::{Future, IntoFuture};
 use std::net::SocketAddr;

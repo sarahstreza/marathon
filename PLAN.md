@@ -135,7 +135,7 @@ Get these right before anything else; every component depends on them.
 | Video | libmpv, OpenGL render API | Thin hand-written bindings in `marathon-mpv`, linked via `pkg-config` (chosen over `libmpv2` in M3; see §12) |
 | Overlay UI | `egui` via `egui_glow` | Drawn over the video each frame; isolated behind a module so it can be replaced. `egui_glow` without its `winit` feature, so the overlay needs no windowing library; egui 0.37 needs Rust 1.95 and its `default_fonts` feature |
 | Gamepad | `gilrs` | |
-| HDMI-CEC | libcec via `cec-rs` | Covers Raspberry Pi, the Linux kernel CEC framework, and Pulse-Eight USB adapters |
+| HDMI-CEC | libcec via a small C shim in `marathon-input-cec` (chosen over `cec-rs` in M7; see §12) | Covers Raspberry Pi, the Linux kernel CEC framework, and Pulse-Eight USB adapters. libcec is GPL-2.0-or-later, so `input-cec` builds are GPL |
 | Remote control / events | axum WebSocket + Server-Sent Events | Client control channel and event stream |
 | Testing | `proptest`, `tempfile`, `tokio::test` | |
 
@@ -223,6 +223,26 @@ rule = { kind = "shuffled" }
 Filesystem sources treat mounted SMB/NFS shares as ordinary paths, which covers
 networked storage on desktop servers for the MVP.
 
+Jellyfin sources (M8) look like this; each library appears as a top-level
+folder named after it, holding the library's own folder layout, so selectors
+work as for a filesystem source:
+
+```toml
+[[source]]
+id = "jellyfin"
+kind = "jellyfin"
+url = "http://jellyfin.lan:8096"
+api_key = "…"                      # never logged or returned by the API
+libraries = ["Shows", "Films"]     # optional; default all
+
+[[channel]]
+id = "office"
+number = 1
+name = "The Office"
+items = [{ source = "jellyfin", path = "Shows/The Office (US)" }]
+rule = { kind = "ordered" }
+```
+
 ---
 
 ## 6. Programming rules (`marathon-rules`)
@@ -267,7 +287,9 @@ sources       (id TEXT PK, kind TEXT, config_json TEXT)
 items         (id TEXT PK, source_id TEXT, path TEXT, size INTEGER, mtime INTEGER,
                show TEXT, season INTEGER, episode INTEGER, title TEXT,
                duration_ms INTEGER NULL, subtitles_json TEXT,
-               missing INTEGER DEFAULT 0, UNIQUE(source_id, path))
+               missing INTEGER DEFAULT 0, external_id TEXT NULL,
+               UNIQUE(source_id, path))
+               -- external_id: the source's own ID (Jellyfin's), for streaming
 channels      (id TEXT PK, number INTEGER, name TEXT, rule_json TEXT, selectors_json TEXT)
 channel_items (channel_id TEXT, item_id TEXT, PRIMARY KEY(channel_id, item_id))
 channel_state (channel_id TEXT PK, item_id TEXT, position_ms INTEGER,
@@ -703,21 +725,34 @@ Client WebSocket control channel, action relay, and event stream, as in §8 and
 
 ### M7 — HDMI-CEC input
 
-`marathon-input-cec` via libcec, behind the `input-cec` feature. Develop on a
-Raspberry Pi (native CEC) or a desktop with a Pulse-Eight USB adapter.
+`marathon-input-cec` via libcec, behind the `input-cec` feature, and enabled
+at runtime with `marathon-desktop --cec`. Develop on a Raspberry Pi (native
+CEC) or a desktop with a Pulse-Eight USB adapter.
 
 Behavior follows the product principle: Marathon is a polite guest on input 4.
 
-- Registers as a playback device with OSD name "Marathon".
+- Registers as a playback device with OSD name "Marathon" (`--cec-name`).
 - **Never requests active source on its own** at startup or wake
-  (`cec.claim_on_start = false`), so it never pulls the TV away from input 1.
-- When the TV switches to Marathon's input, resume playback
-  (`cec.resume_on_select = true`). When the TV switches away or enters
-  standby, pause, report progress, and emit `Standby`.
-- Never sends standby or power-on to the TV unless configured to.
+  (`--cec-claim-on-start` is off by default), so it never pulls the TV away
+  from input 1.
+- When the TV switches to Marathon's input, resume playback (on by default;
+  `--cec-no-resume` turns it off). When the TV switches away or enters
+  standby, pause, report progress, and emit `Standby`. These reach the
+  client as `Action::Standby`/`Action::Wake`; `Wake` resumes only if
+  `Standby` was what paused it, and anything that starts playback (play,
+  tune, skip) also ends standby.
+- Never sends standby or power-on to the TV unless configured to (only
+  `--cec-claim-on-start` can turn it on). libcec's own defaults (waking the
+  TV, powering devices off, holding Stop back as a combo key) are switched
+  off.
 - Remote keys map to `Action`s: D-pad → `Navigate`, OK → `Select`,
-  Back/Return → `Back`, Channel up/down, digits, play/pause/stop, and
-  Info/Guide where the TV forwards them. Colour buttons are user-mappable.
+  Back/Return/Exit → `Back`, Channel up/down, digits (shared channel-number
+  entry with the keyboard), play/pause (stop pauses), rewind/fast forward
+  seek ∓10s, skip forward/back → next/previous item, and Info/Guide (also
+  Menu and Channel list) where the TV forwards them. Colour buttons are
+  user-mappable (`--cec-button red=ACTION`). Only seeking repeats when held.
+- If the adapter is missing or the connection is lost, playback carries on
+  and the adapter is retried every 5s.
 
 **Complete when:**
 - [auto] CEC key code → `Action` mapping is unit tested without hardware.
@@ -741,6 +776,18 @@ Behavior follows the product principle: Marathon is a polite guest on input 4.
 
 Catalog from the Jellyfin API (shows, seasons, episodes, durations); the
 server proxies streams with `Range` pass-through.
+
+As built: libraries come from `/Library/VirtualFolders` and their videos from
+paged `/Items` (episodes, movies, videos, music videos; not virtual
+"missing" episodes). Item paths are `<library name>/<path within the
+library's folder>` (or `Series/Season N/Name` when Jellyfin reports no
+file), and show/season/episode/title come from Jellyfin's metadata, not file
+names. Jellyfin's durations are authoritative over client reports. Streams
+proxy `/Videos/{id}/stream?static=true` (the original file), passing range
+and conditional headers both ways; an unreachable Jellyfin is a `502` with
+error code `upstream`. The API key travels only in the `Authorization`
+header. Jellyfin's external subtitle files are not imported (embedded
+subtitles play as usual).
 
 **Complete when:**
 - [auto] Jellyfin client tests run against recorded or mocked API responses
@@ -834,6 +881,7 @@ system. No Windows build (keep code portable, but do not test it yet).
 | Progress report interval | 5s | If DB growth matters |
 | Finished threshold | `max(30s, 2%)` from end | After living with it; credits vary |
 | Resume rewind | 5s | Personal taste |
+| libcec bindings | Decided in M7: a C shim compiled against the installed libcec headers, so any libcec from 4.x works (Ubuntu 24.04 has 6, Fedora 44 has 7, Homebrew has 8). `cec-rs` is deprecated; Pulse-Eight's official `libcec` crate requires libcec 8, which distros and Raspberry Pi OS don't ship yet | When distros ship libcec 8: the official crate could replace the shim |
 | CEC claims active source on start | Off | Never by default; it's input 4 |
 | CEC resumes when TV switches to Marathon | On | If some TVs report routing changes unreliably |
 | Project license | MIT OR Apache-2.0 | Before publishing |

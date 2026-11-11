@@ -52,6 +52,9 @@ pub struct ItemRow {
     pub duration_ms: Option<i64>,
     pub subtitles_json: String,
     pub missing: bool,
+    /// The source's own ID for the item (Jellyfin's item ID); `None` for
+    /// filesystem items.
+    pub external_id: Option<String>,
 }
 
 /// A row of `channels`.
@@ -108,6 +111,11 @@ pub struct ScannedItem {
     pub episode: Option<i64>,
     pub title: String,
     pub subtitles_json: String,
+    /// The source's own ID for the item, if it has one.
+    pub external_id: Option<String>,
+    /// The duration, if the source knows it (Jellyfin does). Overwrites
+    /// whatever a client reported; `None` leaves the stored value alone.
+    pub duration_ms: Option<i64>,
 }
 
 /// What a scan changes for one source, applied in one transaction.
@@ -131,7 +139,7 @@ pub struct SourceDef {
 }
 
 const ITEM_COLUMNS: &str = "id, source_id, path, size, mtime, show, season, episode, title, \
-                            duration_ms, subtitles_json, missing";
+                            duration_ms, subtitles_json, missing, external_id";
 
 impl Db {
     /// Opens (creating if needed) the database at `path` and runs any
@@ -314,8 +322,8 @@ impl Db {
         for (id, item) in &changes.insert {
             sqlx::query(
                 "INSERT INTO items (id, source_id, path, size, mtime, show, season, episode,
-                                    title, subtitles_json, missing)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                                    title, subtitles_json, external_id, duration_ms, missing)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
             )
             .bind(id)
             .bind(source_id)
@@ -327,14 +335,16 @@ impl Db {
             .bind(item.episode)
             .bind(&item.title)
             .bind(&item.subtitles_json)
+            .bind(&item.external_id)
+            .bind(item.duration_ms)
             .execute(&mut *tx)
             .await?;
         }
         for (id, item, file_changed) in &changes.update {
             sqlx::query(
                 "UPDATE items SET size = ?, mtime = ?, show = ?, season = ?, episode = ?,
-                    title = ?, subtitles_json = ?, missing = 0,
-                    duration_ms = CASE WHEN ? THEN NULL ELSE duration_ms END
+                    title = ?, subtitles_json = ?, external_id = ?, missing = 0,
+                    duration_ms = COALESCE(?, CASE WHEN ? THEN NULL ELSE duration_ms END)
                  WHERE id = ?",
             )
             .bind(item.size)
@@ -344,6 +354,8 @@ impl Db {
             .bind(item.episode)
             .bind(&item.title)
             .bind(&item.subtitles_json)
+            .bind(&item.external_id)
+            .bind(item.duration_ms)
             .bind(*file_changed)
             .bind(id)
             .execute(&mut *tx)

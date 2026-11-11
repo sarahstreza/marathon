@@ -1,0 +1,242 @@
+{
+ "Items": [
+  {
+   "Name": "The Injury",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "0ffe0314aaaaaaaaaaaaaaaaaaaaaaaa",
+   "Etag": "e0ffe031",
+   "DateCreated": "2025-03-14T20:11:02.0000000Z",
+   "CanDelete": false,
+   "SortName": "003 - 0014 - The Injury",
+   "ChannelId": null,
+   "RunTimeTicks": 13200000000,
+   "IsFolder": false,
+   "IndexNumber": 14,
+   "ParentIndexNumber": 3,
+   "Type": "Episode",
+   "SeriesName": "The Office (US)",
+   "SeriesId": "5e7e5314aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonId": "5ea50314aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonName": "Season 3",
+   "VideoType": "VideoFile",
+   "LocationType": "FileSystem",
+   "MediaType": "Video",
+   "UserData": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "IsFavorite": false,
+    "Played": false,
+    "Key": "0ffe0314aaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "Path": "/media/tv/The Office (US)/Season 3/The Office (US) - S03E14 - The Injury.mkv",
+   "MediaSources": [
+    {
+     "Protocol": "File",
+     "Id": "0ffe0314aaaaaaaaaaaaaaaaaaaaaaaa",
+     "Path": "/media/tv/The Office (US)/Season 3/The Office (US) - S03E14 - The Injury.mkv",
+     "Type": "Default",
+     "Container": "mkv",
+     "Size": 1000,
+     "Name": "The Injury",
+     "IsRemote": false,
+     "RunTimeTicks": 13200000000,
+     "SupportsDirectStream": true,
+     "SupportsTranscoding": true,
+     "MediaStreams": [
+      {
+       "Codec": "h264",
+       "Type": "Video",
+       "Index": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "Name": "The Return",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "0ffe0315aaaaaaaaaaaaaaaaaaaaaaaa",
+   "Etag": "e0ffe031",
+   "DateCreated": "2025-03-14T20:11:02.0000000Z",
+   "CanDelete": false,
+   "SortName": "003 - 0015 - The Return",
+   "ChannelId": null,
+   "RunTimeTicks": 13080000000,
+   "IsFolder": false,
+   "IndexNumber": 15,
+   "ParentIndexNumber": 3,
+   "Type": "Episode",
+   "SeriesName": "The Office (US)",
+   "SeriesId": "5e7e5315aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonId": "5ea50315aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonName": "Season 3",
+   "VideoType": "VideoFile",
+   "LocationType": "FileSystem",
+   "MediaType": "Video",
+   "UserData": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "IsFavorite": false,
+    "Played": false,
+    "Key": "0ffe0315aaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "Path": "/media/tv/The Office (US)/Season 3/The Office (US) - S03E15 - The Return.mkv",
+   "MediaSources": [
+    {
+     "Protocol": "File",
+     "Id": "0ffe0315aaaaaaaaaaaaaaaaaaaaaaaa",
+     "Path": "/media/tv/The Office (US)/Season 3/The Office (US) - S03E15 - The Return.mkv",
+     "Type": "Default",
+     "Container": "mkv",
+     "Size": 1100,
+     "Name": "The Return",
+     "IsRemote": false,
+     "RunTimeTicks": 13080000000,
+     "SupportsDirectStream": true,
+     "SupportsTranscoding": true,
+     "MediaStreams": [
+      {
+       "Codec": "h264",
+       "Type": "Video",
+       "Index": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "Name": "Pilot",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "0ffe0101aaaaaaaaaaaaaaaaaaaaaaaa",
+   "Etag": "e0ffe010",
+   "DateCreated": "2025-03-14T20:11:02.0000000Z",
+   "CanDelete": false,
+   "SortName": "001 - 0001 - Pilot",
+   "ChannelId": null,
+   "RunTimeTicks": 13740000000,
+   "IsFolder": false,
+   "IndexNumber": 1,
+   "ParentIndexNumber": 1,
+   "Type": "Episode",
+   "SeriesName": "The Office (US)",
+   "SeriesId": "5e7e5101aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonId": "5ea50101aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonName": "Season 1",
+   "VideoType": "VideoFile",
+   "LocationType": "FileSystem",
+   "MediaType": "Video",
+   "UserData": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "IsFavorite": false,
+    "Played": false,
+    "Key": "0ffe0101aaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "Path": "/media/tv/The Office (US)/Season 1/The Office (US) - S01E01 - Pilot.mkv",
+   "MediaSources": [
+    {
+     "Protocol": "File",
+     "Id": "0ffe0101aaaaaaaaaaaaaaaaaaaaaaaa",
+     "Path": "/media/tv/The Office (US)/Season 1/The Office (US) - S01E01 - Pilot.mkv",
+     "Type": "Default",
+     "Container": "mkv",
+     "Size": 1200,
+     "Name": "Pilot",
+     "IsRemote": false,
+     "RunTimeTicks": 13740000000,
+     "SupportsDirectStream": true,
+     "SupportsTranscoding": true,
+     "MediaStreams": [
+      {
+       "Codec": "h264",
+       "Type": "Video",
+       "Index": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "Name": "Lecture Circuit (Part 1)",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "0ffe0316aaaaaaaaaaaaaaaaaaaaaaaa",
+   "Etag": "e0ffe031",
+   "DateCreated": "2025-03-14T20:11:02.0000000Z",
+   "CanDelete": false,
+   "SortName": "003 - 0016 - Lecture Circuit (Part 1)",
+   "ChannelId": null,
+   "IsFolder": false,
+   "IndexNumber": 16,
+   "ParentIndexNumber": 3,
+   "Type": "Episode",
+   "SeriesName": "The Office (US)",
+   "SeriesId": "5e7e5316aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonId": "5ea50316aaaaaaaaaaaaaaaaaaaaaaaa",
+   "SeasonName": "Season 3",
+   "VideoType": "VideoFile",
+   "LocationType": "Virtual",
+   "MediaType": "Video",
+   "UserData": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "IsFavorite": false,
+    "Played": false,
+    "Key": "0ffe0316aaaaaaaaaaaaaaaaaaaaaaaa"
+   }
+  },
+  {
+   "Name": "Melon Buffet",
+   "ServerId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+   "Id": "7a5c0101bbbbbbbbbbbbbbbbbbbbbbbb",
+   "Etag": "e7a5c010",
+   "DateCreated": "2025-03-14T20:11:02.0000000Z",
+   "CanDelete": false,
+   "SortName": "001 - 0001 - Melon Buffet",
+   "ChannelId": null,
+   "RunTimeTicks": 27600000000,
+   "IsFolder": false,
+   "IndexNumber": 1,
+   "ParentIndexNumber": 1,
+   "Type": "Episode",
+   "SeriesName": "Taskmaster",
+   "SeriesId": "5e7e5101bbbbbbbbbbbbbbbbbbbbbbbb",
+   "SeasonId": "5ea50101bbbbbbbbbbbbbbbbbbbbbbbb",
+   "SeasonName": "Season 1",
+   "VideoType": "VideoFile",
+   "LocationType": "FileSystem",
+   "MediaType": "Video",
+   "UserData": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "IsFavorite": false,
+    "Played": false,
+    "Key": "7a5c0101bbbbbbbbbbbbbbbbbbbbbbbb"
+   },
+   "Path": "/media/tv/Taskmaster/Season 1/Taskmaster - S01E01.mkv",
+   "MediaSources": [
+    {
+     "Protocol": "File",
+     "Id": "7a5c0101bbbbbbbbbbbbbbbbbbbbbbbb",
+     "Path": "/media/tv/Taskmaster/Season 1/Taskmaster - S01E01.mkv",
+     "Type": "Default",
+     "Container": "mkv",
+     "Size": 1300,
+     "Name": "Melon Buffet",
+     "IsRemote": false,
+     "RunTimeTicks": 27600000000,
+     "SupportsDirectStream": true,
+     "SupportsTranscoding": true,
+     "MediaStreams": [
+      {
+       "Codec": "h264",
+       "Type": "Video",
+       "Index": 0
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "TotalRecordCount": 5,
+ "StartIndex": 0
+}

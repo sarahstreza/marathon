@@ -14,6 +14,7 @@
 //! - [`remote`] (feature `remote`): the control channel to the server, so
 //!   actions relayed through it reach the bus and the client's events
 //!   reach observers.
+//! - [`digits`]: typing a channel number, for inputs with number keys.
 //! - [`client_id`]: the per-installation client ID.
 //!
 //! The [`Action`](marathon_api::Action) and [`Event`](marathon_api::Event)
@@ -25,6 +26,7 @@
 pub mod api;
 pub mod bus;
 pub mod client_id;
+pub mod digits;
 #[cfg(feature = "input-gamepad")]
 pub mod gamepad;
 pub mod input;

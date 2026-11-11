@@ -91,8 +91,9 @@ more fields.
 
 `navigate`, `select`, and `back` behave exactly like the arrow keys,
 Enter, and Esc ([CONTROLS.md](CONTROLS.md)): with the guide open, `up` and
-`down` move its highlight; otherwise they change channel. `standby` and
-`wake` are accepted but the desktop client doesn't act on them yet.
+`down` move its highlight; otherwise they change channel. `standby`
+pauses and saves the position (as when the TV switches to another input),
+and `wake` resumes, but only if `standby` was what paused it.
 
 Actions from every source are equal and are handled in the order they
 arrive. A remote can't lock out the keyboard or vice versa.
