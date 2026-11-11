@@ -117,6 +117,9 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(fr
             Spacer(Modifier.width(pt * 16))
             Text(banner.channelName, color = Color.White, fontSize = (pt * 28).toSp(), fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
+        // The child channel a nested channel is playing (PLAN.md M11):
+        // "Video Essayists" above, "Contrapoints" here, then the title.
+        banner.via?.let { Text("$it:", color = Color(0xFFDDDDDD), fontSize = (pt * 18).toSp(), maxLines = 1) }
         banner.show?.let { Text(it, color = Color(0xFFDDDDDD), fontSize = (pt * 18).toSp(), maxLines = 1) }
         banner.title?.let {
             Text(it, color = Color.White, fontSize = (pt * 20).toSp(), maxLines = 1, overflow = TextOverflow.Ellipsis)

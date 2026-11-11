@@ -10,6 +10,7 @@ package marathon.core
 
 import marathon.api.models.AdvanceReason
 import marathon.api.models.AdvanceRequest
+import marathon.api.models.ChannelRef
 import marathon.api.models.ChannelSummary
 import marathon.api.models.ErrorCode
 import marathon.api.models.EventKind
@@ -70,6 +71,15 @@ private class FakeChannel(val id: String, val number: Int, var items: MutableLis
     var current = 0
     var positionMs = 0L
 
+    /** Hidden channels are left out of `channels`, as the server does. */
+    var hidden = false
+
+    /** Child channels the items come through (PLAN.md M11). */
+    var via: List<ChannelRef> = emptyList()
+
+    /** What `now` and `advance` report the server skipped. */
+    var warnings: List<String> = emptyList()
+
     fun now(): Now {
         val item = items[current]
         val next = items[(current + 1) % items.size]
@@ -81,6 +91,8 @@ private class FakeChannel(val id: String, val number: Int, var items: MutableLis
             positionMs = positionMs,
             streamUrl = url(item.id),
             next = NextItem(item = next, streamUrl = url(next.id)),
+            resolutionPath = listOf(ChannelRef(id = id, name = "Channel $number")) + via,
+            warnings = warnings,
         )
     }
 
@@ -109,7 +121,7 @@ private class FakeApi(val server: FakeServer, val journal: MutableList<Entry>) :
 
     override fun channels(): List<ChannelSummary> {
         log(Entry.Channels)
-        return server.channels.map { c ->
+        return server.channels.filter { !it.hidden }.map { c ->
             ChannelSummary(
                 id = c.id,
                 itemCount = c.items.size,
@@ -937,6 +949,62 @@ class TunerTest {
         assertEquals(2, h.tuner.now()!!.channelNumber)
         val err = assertThrows<TunerError.NoSuchChannel> { h.tuner.handleAction(Action.GoToChannelId("nope")) }
         assertEquals("nope", err.name)
+    }
+
+    @Test
+    fun hidden_channels_are_skipped_by_flipping_and_number_but_reachable_by_id() {
+        val h = Harness(3, 2)
+        h.server.channels[1].hidden = true
+        h.tuner.start(1)
+        h.action(Action.ChannelUp)
+        assertEquals("c3", h.tuner.now()!!.channelId)
+        h.action(Action.ChannelDown)
+        assertEquals("c1", h.tuner.now()!!.channelId)
+        val err = assertThrows<TunerError.NoSuchChannel> { h.tuner.handleAction(Action.GoToChannel(2)) }
+        assertEquals("2", err.name)
+        assertEquals("c1", h.tuner.now()!!.channelId)
+
+        // By ID, the hidden channel is reachable.
+        h.action(Action.GoToChannelId("c2"))
+        assertEquals("c2", h.tuner.now()!!.channelId)
+        // Flipping from it goes to its visible neighbours.
+        h.action(Action.ChannelUp)
+        assertEquals("c3", h.tuner.now()!!.channelId)
+        // And the guide lists only visible channels.
+        h.action(Action.ToggleGuide)
+        val guide = h.takeUi().filterIsInstance<UiEvent.GuideChanged>().last().guide!!
+        assertEquals(listOf(1, 3), guide.rows.map { it.number })
+    }
+
+    @Test
+    fun nested_channels_report_their_resolution_path() {
+        val h = Harness(2, 2)
+        h.server.channels[0].via = listOf(ChannelRef(id = "child", name = "Child"))
+        h.tuner.start(1)
+        val events = h.takeEvents()
+        val path = listOf("c1", "child")
+        assertTrue(events.any { it is Event.ChannelChanged && it.resolutionPath == path }, "$events")
+        assertTrue(events.any { it is Event.NowPlaying && it.resolutionPath == path }, "$events")
+        val banner = h.takeUi().filterIsInstance<UiEvent.Playing>().first().banner
+        assertEquals("Child: c1-0", banner.itemLine())
+    }
+
+    @Test
+    fun what_the_server_skipped_is_reported_as_errors() {
+        val h = Harness(2, 2)
+        val warning = "channel \"empty\" has nothing to play; channel \"c1\" skipped it"
+        h.server.channels[0].warnings = listOf(warning)
+        h.tuner.start(1)
+        val events = h.takeEvents()
+        val error = events.indexOfFirst { it is Event.Error && it.message == warning }
+        val playing = events.indexOfFirst { it is Event.NowPlaying }
+        assertTrue(error >= 0 && error < playing, "$events")
+        // Playback carries on.
+        assertEquals("c1-0", h.tuner.now()!!.item.id)
+
+        // Advancing at the end of an item reports them too.
+        h.tuner.handlePlayerEvent(PlayerEvent.Ended)
+        assertTrue(h.takeEvents().any { it is Event.Error && it.message == warning })
     }
 
     @Test
