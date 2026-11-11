@@ -57,10 +57,10 @@ desktop app with `--no-default-features` to leave gamepads out):
 | macOS | `brew install mpv pkgconf` |
 
 HDMI-CEC support (the TV's remote) is optional and off by default. To build
-it, add libcec's development package (`libcec-devel`, `libcec-dev`, or
-`brew install libcec`; libcec 4 or newer) and build with `--features
-input-cec`. libcec is GPL-2.0-or-later, so such builds are covered by the
-GPL.
+it, add libcec's development files (libcec 4 or newer: `libcec-devel` on
+Fedora, `libcec-dev libp8-platform-dev` on Debian/Ubuntu, `brew install
+libcec` on macOS) and build with `--features input-cec`. libcec is
+GPL-2.0-or-later, so such builds are covered by the GPL.
 
 Every change must pass:
 

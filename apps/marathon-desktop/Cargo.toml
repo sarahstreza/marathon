@@ -43,6 +43,7 @@ default = ["input-gamepad"]
 # Gamepad input through gilrs (needs libudev on Linux).
 input-gamepad = ["dep:gilrs", "marathon-client/input-gamepad"]
 # The TV's remote over HDMI-CEC, enabled at runtime with --cec (needs
-# libcec: libcec-devel, libcec-dev, or `brew install libcec`). libcec is
+# libcec: libcec-devel, libcec-dev and libp8-platform-dev, or
+# `brew install libcec`). libcec is
 # GPL-2.0-or-later, so builds with this feature are covered by the GPL.
 input-cec = ["dep:marathon-input-cec", "marathon-input-cec/libcec"]

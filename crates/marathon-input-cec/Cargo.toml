@@ -28,7 +28,8 @@ cc = { workspace = true, optional = true }
 pkg-config = { workspace = true, optional = true }
 
 [features]
-# The real CEC adapter, through the system libcec (libcec-devel,
-# libcec-dev, or `brew install libcec`; any version from 4 on). Without it
+# The real CEC adapter, through the system libcec (libcec-devel;
+# libcec-dev and libp8-platform-dev; or `brew install libcec`; any version
+# from 4 on). Without it
 # the crate is the hardware-independent logic and the adapter trait.
 libcec = ["dep:cc", "dep:pkg-config"]

@@ -5,8 +5,8 @@
 //! The shim is why there are no hand-maintained struct layouts here:
 //! libcec's configuration struct grows with every major version, and C
 //! code compiled against the local headers always gets it right. Install
-//! libcec's development package (`libcec-devel` on Fedora, `libcec-dev` on
-//! Debian/Ubuntu) or `brew install libcec` on macOS.
+//! libcec's development package (`libcec-devel` on Fedora, `libcec-dev` and
+//! `libp8-platform-dev` on Debian/Ubuntu) or `brew install libcec` on macOS.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -32,7 +32,7 @@ fn libcec() {
             // itself; panicking would hide the hint behind a backtrace.
             println!("cargo:warning=libcec (4.0 or newer) not found via pkg-config: {err}");
             println!(
-                "cargo:warning=install libcec's development package (libcec-devel, libcec-dev, or `brew install libcec`), or build without the `input-cec` feature"
+                "cargo:warning=install libcec's development package (libcec-devel; libcec-dev and libp8-platform-dev; or `brew install libcec`), or build without the `input-cec` feature"
             );
             std::process::exit(1);
         }
