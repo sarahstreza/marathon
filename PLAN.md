@@ -257,6 +257,10 @@ Rules are data, composed from a small set of primitives:
 - `grouped { by, groups, within }` — partition items (`by = "season" | "folder"`),
   order the groups with `groups` (`ordered` | `shuffled`), and order items within
   each group with `within`. Taskmaster is `grouped(season, shuffled, ordered)`.
+- `weighted { by }` (M11) — pick at random in proportion to caller-supplied
+  weights, never the same item twice in a row. `by` (`manual` | `item_count` |
+  `duration`) only tells the server how to compute weights; the engine takes
+  them through `next_weighted`.
 
 API shape (illustrative):
 
@@ -293,10 +297,13 @@ items         (id TEXT PK, source_id TEXT, path TEXT, size INTEGER, mtime INTEGE
 channels      (id TEXT PK, number INTEGER, name TEXT, rule_json TEXT, selectors_json TEXT)
 channel_items (channel_id TEXT, item_id TEXT, PRIMARY KEY(channel_id, item_id))
 channel_state (channel_id TEXT PK, item_id TEXT, position_ms INTEGER,
-               cursor_json TEXT, updated_at INTEGER)
+               cursor_json TEXT, updated_at INTEGER,
+               children_json TEXT)  -- M11: an independent parent's states for its children
 events        (id TEXT PK, ts INTEGER, client_id TEXT, channel_id TEXT,
-               item_id TEXT, kind TEXT, position_ms INTEGER)
+               item_id TEXT, kind TEXT, position_ms INTEGER,
+               resolved_channel_id TEXT, resolution_path_json TEXT)  -- M11
                -- kind: tuned | progress | ended | skipped | previous | paused | resumed
+               -- channel_id: the channel tuned to; resolved_channel_id: the one the item came from
 ```
 
 - Channels in config are upserted into `channels` on startup; config is
@@ -320,11 +327,12 @@ via `http-header-fields`).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health`, `/version` | Liveness, API version |
-| GET | `/channels` | List channels with current item summary |
+| GET | `/channels` | List channels with current item summary, in guide order. Hidden channels (M11) only with `?include_hidden=true` |
 | GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch |
 | POST | `/channels/{id}/progress` | `{item_id, position_ms, duration_ms?, paused}` |
 | POST | `/channels/{id}/advance` | `{from_item_id, reason: "ended" \| "skipped"}` → new `now`. **Idempotent:** if `from_item_id` is not the channel's current item, return the current `now` without advancing |
 | POST | `/channels/{id}/previous` | `{from_item_id}` → new `now`. Step back via the rule's `previous`; idempotent like `advance` |
+| GET | `/channels/{id}/plan?items=&hours=` | M11: what the channel will play from its current item on, by stepping copies of its state (and its children's) exactly as playback would |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
@@ -970,6 +978,22 @@ Semantics:
   channels.
 - [manual] An invalid config (e.g. a cycle) fails at startup with a message a
   user can act on, rather than a panic or a hang.
+
+As built: child channel entries reach the rules engine as items with ID
+`channel:<id>` and path `channels/<id>`, so `ordered` plays children in
+order of channel ID, and grouping by folder puts them in one group. A path
+selector's entries are its individual items (its `weight` applies to each);
+to weigh a folder as one entry, make it a hidden child channel. `previous`
+undoes `advance`: the parent steps back, and if it lands on a child, the
+child steps back too. Resolution lives in `marathon-server`'s `nested`
+module, over preloaded data with no database access, so `now`'s `next`,
+plans, and live requests all run the same code; a state created while
+resolving a parent gets a seed derived from the parent's, so plans predict
+it. Independent parents store their children's states by address
+(`child`, `child>grandchild`) in `channel_state.children_json`. The server
+skips at most 5 empty children per request (the client's failure cap) and
+reports each skip in `Now.warnings`, which clients emit as `Error` events.
+A hidden channel may omit `number`; the API reports it as `0`.
 
 ### After the MVP (not now)
 
