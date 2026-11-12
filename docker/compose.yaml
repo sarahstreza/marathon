@@ -13,6 +13,9 @@ services:
       - "7878:7878"
     environment:
       RUST_LOG: info
+      # The uid/gid marathond runs as and that owns the data volume.
+      PUID: 1000
+      PGID: 1000
     volumes:
       - ./marathon.toml:/config/config.toml:ro
       - marathon-data:/data

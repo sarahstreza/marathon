@@ -140,8 +140,8 @@ mpv http://localhost:7878/api/v1/stream/<item-id>
 #### Running the server in a container
 
 The [`Dockerfile`](Dockerfile) builds a small image holding only
-`marathond`: a static (musl) binary on `distroless/static`, with no shell or
-libc, running as a non-root user. It works with Docker or Podman:
+`marathond`: a static (musl) binary on Alpine, running as an unprivileged
+user (uid/gid 1000 by default). It works with Docker or Podman:
 
 ```sh
 docker build -t marathond .
@@ -163,9 +163,22 @@ path in [`docker/compose.yaml`](docker/compose.yaml). The image expects:
 | `/media` | Your videos, by convention (any path works if the config's source `root` matches) |
 
 The container listens on `0.0.0.0:7878` (the default command passes
-`--bind`), so `server.token` must be set. The server runs as uid 65532; a
-bind-mounted `/data` directory must be writable by it (a named volume is
-set up automatically). On SELinux hosts (Fedora), add `:z` to bind mounts.
+`--bind`), so `server.token` must be set.
+
+The server runs as uid 1000, gid 1000. To run it as a different host user,
+for example so a bind-mounted `/data` belongs to you, set `PUID` and `PGID`:
+
+```sh
+docker run -d -e PUID="$(id -u)" -e PGID="$(id -g)" ...
+```
+
+At startup the entrypoint (still root at that point) makes `/data` owned by
+`PUID:PGID`, then drops to that user to run `marathond`. Changing the ids
+later re-owns `/data` on the next start. The media and config mounts only
+need to be readable by that user. If you start the container with `--user`
+instead, it runs as that user and ignores `PUID`/`PGID`, and `/data` must
+already be writable by it. On SELinux hosts (Fedora), add `:z` to bind
+mounts.
 With rootless Podman, reach the server at `127.0.0.1` rather than
 `localhost`: the server listens on IPv4 only, and Podman's port forwarding
 resets connections to `::1`.
