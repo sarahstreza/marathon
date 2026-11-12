@@ -57,6 +57,15 @@ pub struct ItemRow {
     pub external_id: Option<String>,
 }
 
+/// An item of a channel, with where the channel's definition lists it.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct ChannelItemRow {
+    #[sqlx(flatten)]
+    pub item: ItemRow,
+    /// `channel_items.position`: lower is listed earlier.
+    pub position: Option<i64>,
+}
+
 /// A row of `channels`.
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct ChannelRow {
@@ -393,34 +402,43 @@ impl Db {
 
     // --- Channel membership -----------------------------------------------
 
-    /// Replaces the whole `channel_items` table.
+    /// Replaces the whole `channel_items` table with `members`: (channel
+    /// ID, item ID, position) triples. A repeated (channel, item) pair keeps
+    /// its first position.
     pub async fn replace_channel_items(
         &self,
-        pairs: &[(String, String)],
+        members: &[(String, String, i64)],
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM channel_items")
             .execute(&mut *tx)
             .await?;
-        for (channel_id, item_id) in pairs {
-            sqlx::query("INSERT OR IGNORE INTO channel_items (channel_id, item_id) VALUES (?, ?)")
-                .bind(channel_id)
-                .bind(item_id)
-                .execute(&mut *tx)
-                .await?;
+        for (channel_id, item_id, position) in members {
+            sqlx::query(
+                "INSERT OR IGNORE INTO channel_items (channel_id, item_id, position)
+                 VALUES (?, ?, ?)",
+            )
+            .bind(channel_id)
+            .bind(item_id)
+            .bind(position)
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await
     }
 
-    /// The playable (not missing) items of a channel.
-    pub async fn channel_items(&self, channel_id: &str) -> Result<Vec<ItemRow>, sqlx::Error> {
+    /// The playable (not missing) items of a channel, with their positions.
+    pub async fn channel_items(
+        &self,
+        channel_id: &str,
+    ) -> Result<Vec<ChannelItemRow>, sqlx::Error> {
         let columns = ITEM_COLUMNS
             .split(", ")
             .map(|c| format!("i.{}", c.trim()))
             .collect::<Vec<_>>()
             .join(", ");
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {columns} FROM items i
+            "SELECT {columns}, ci.position FROM items i
              JOIN channel_items ci ON ci.item_id = i.id
              WHERE ci.channel_id = ? AND i.missing = 0"
         )))

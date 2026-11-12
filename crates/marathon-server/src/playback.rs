@@ -350,15 +350,21 @@ impl App {
                 continue;
             };
             queue.extend(channel.children().map(|c| c.channel.clone()));
-            let items = db.channel_items(&id).await?;
+            let members = db.channel_items(&id).await?;
             if let Some(state) = db.state(&id).await? {
                 rows.insert(id.clone(), row_from(&state));
             }
+            let positions = members
+                .iter()
+                .filter_map(|m| Some((m.item.id.clone(), u32::try_from(m.position?).ok()?)))
+                .collect();
+            let items = members.into_iter().map(|m| m.item).collect();
             data.channels.insert(
                 id,
                 ChannelData {
                     config: channel.clone(),
                     items,
+                    positions,
                 },
             );
         }

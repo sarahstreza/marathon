@@ -93,6 +93,9 @@ pub(crate) struct ChannelData {
     pub config: ChannelConfig,
     /// The channel's own playable items (not its children's).
     pub items: Vec<ItemRow>,
+    /// Each item's place in the channel's list, by item ID, for the
+    /// `listed` rule (`channel_items.position`).
+    pub positions: HashMap<String, u32>,
 }
 
 /// Every channel a request may reach: the requested one and its
@@ -286,14 +289,17 @@ impl<'a> Resolver<'a> {
     }
 
     /// The rules engine's entries for a channel: its items, then its
-    /// children.
+    /// children, each with its place in the channel's list.
     fn keys(channel: &ChannelData) -> Vec<ItemKey> {
-        channel
-            .items
-            .iter()
-            .map(item_key)
-            .chain(channel.config.children().map(|c| child_key(&c.channel)))
-            .collect()
+        let items = channel.items.iter().map(|row| ItemKey {
+            position: channel.positions.get(&row.id).copied(),
+            ..item_key(row)
+        });
+        let children = channel.config.children().map(|c| ItemKey {
+            position: channel.config.child_position(&c.channel),
+            ..child_key(&c.channel)
+        });
+        items.chain(children).collect()
     }
 
     fn entry<'c>(channel: &'c ChannelData, id: &str) -> Option<EntryRef<'c>> {

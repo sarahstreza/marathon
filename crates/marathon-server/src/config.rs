@@ -438,6 +438,39 @@ impl ChannelConfig {
         })
     }
 
+    /// Where each of `items` starts in the channel's list order, for the
+    /// `listed` rule (aligned with `items`). A selector takes one place for
+    /// its `path`, or one for each of its `files`; a child channel takes
+    /// one.
+    pub fn list_positions(&self) -> Vec<u32> {
+        let mut next: u32 = 0;
+        self.items
+            .iter()
+            .map(|entry| {
+                let start = next;
+                let places = match entry {
+                    Entry::Items(selector) => selector.files.len().max(1),
+                    Entry::Channel(_) => 1,
+                };
+                next = next.saturating_add(u32::try_from(places).unwrap_or(u32::MAX));
+                start
+            })
+            .collect()
+    }
+
+    /// The position of the child channel entry for `child` in
+    /// [`list_positions`](Self::list_positions) order, if this channel has
+    /// one.
+    pub fn child_position(&self, child: &str) -> Option<u32> {
+        self.items
+            .iter()
+            .zip(self.list_positions())
+            .find_map(|(entry, position)| match entry {
+                Entry::Channel(c) if c.channel == child => Some(position),
+                _ => None,
+            })
+    }
+
     /// The channel's child channel entries.
     pub fn children(&self) -> impl Iterator<Item = &ChildEntry> {
         self.items.iter().filter_map(|entry| match entry {
@@ -1116,6 +1149,33 @@ mod tests {
         let s = &items[0];
         assert!(s.matches("Show/Season 1/e1.mkv"));
         assert!(!s.matches("Show/Season 2/e1.mkv"));
+    }
+
+    #[test]
+    fn list_positions_count_files_and_children() {
+        let toml = with_channels(
+            r#"
+[[channel]]
+id = "a"
+number = 1
+name = "x"
+items = [
+  { source = "nas", path = "TV", files = ["a.mkv", "b.mkv", "c.mkv"] },
+  { channel = "b" },
+  { source = "nas", path = "Films" },
+  { channel = "c" },
+]
+rule = { kind = "listed" }
+"#,
+        ) + &channel("b", Some(2), LEAF_ITEMS, "")
+            + &channel("c", Some(3), LEAF_ITEMS, "");
+        let config = Config::from_toml_str(&toml).unwrap();
+        config.validate().unwrap();
+        let a = &config.channels[0];
+        assert_eq!(a.list_positions(), [0, 3, 4, 5]);
+        assert_eq!(a.child_position("b"), Some(3));
+        assert_eq!(a.child_position("c"), Some(5));
+        assert_eq!(a.child_position("a"), None);
     }
 
     #[test]
