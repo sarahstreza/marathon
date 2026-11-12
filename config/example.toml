@@ -33,6 +33,16 @@ root = "/mnt/nas/video"
 # up the videos directly in it plus those in its `Season N` subfolders, so a
 # show laid out as `Show/Season 1/...` needs no `recursive`. Add
 # `recursive = true` to include every subfolder at any depth.
+#
+# Two optional lists refine an item, both relative to its `path`:
+#   files   = [...]  select exactly these files (or folders) instead of
+#                    `path` itself, in this order
+#   exclude = [...]  leave out these files, or folders and all they hold
+#
+# Rules: `ordered` sorts by season/episode (else by name); `listed` plays
+# in the order the channel lists things here, with each folder's contents
+# in season/episode order (and child channels where they are listed);
+# `shuffled`, `grouped`, and `weighted` are below.
 
 # Plays episodes in season/episode order, looping at the end.
 [[channel]]
@@ -94,3 +104,20 @@ name = "Folding Ideas"
 hidden = true
 items = [{ source = "nas", path = "YouTube/Folding Ideas" }]
 rule = { kind = "ordered" }
+
+# A hand-picked running order: the `listed` rule plays the files in the
+# order given, then the remaining Specials (minus one), then loops.
+[[channel]]
+id = "doctor-who"
+number = 9
+name = "Doctor Who: The Good Ones"
+items = [
+  { source = "nas", path = "TV/Doctor Who", files = [
+      "Season 1/Doctor Who - S01E06 - Dalek.mkv",
+      "Season 3/Doctor Who - S03E10 - Blink.mkv",
+      "Season 4/Doctor Who - S04E08 - Silence in the Library.mkv",
+      "Season 4/Doctor Who - S04E09 - Forest of the Dead.mkv",
+  ] },
+  { source = "nas", path = "TV/Doctor Who/Specials", exclude = ["The Infinite Quest.mkv"] },
+]
+rule = { kind = "listed" }
