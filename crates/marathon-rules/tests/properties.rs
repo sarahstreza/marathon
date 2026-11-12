@@ -32,8 +32,9 @@ fn video(n: usize) -> impl Strategy<Value = ItemKey> {
         prop::option::of(0u32..4),
         prop::option::of(0u32..6),
         any::<bool>(),
+        prop::option::of(0u32..8),
     )
-        .prop_map(move |(folder, season, episode, has_show)| {
+        .prop_map(move |(folder, season, episode, has_show, position)| {
             let folder = FOLDERS[folder];
             let sep = if folder.is_empty() { "" } else { "/" };
             ItemKey {
@@ -42,6 +43,7 @@ fn video(n: usize) -> impl Strategy<Value = ItemKey> {
                 show: has_show.then(|| "Show".to_owned()),
                 season,
                 episode,
+                position,
             }
         })
 }
@@ -88,6 +90,23 @@ proptest! {
         for cycle in seq.chunks(items.len()) {
             prop_assert_eq!(cycle, expected.as_slice());
         }
+    }
+
+    #[test]
+    fn listed_is_listed_order_repeated(items in items(40)) {
+        prop_assume!(!items.is_empty());
+        let mut sorted = items.clone();
+        sorted.sort_by(ItemKey::listed_order);
+        let expected: Vec<String> = sorted.iter().map(|i| i.id.clone()).collect();
+        let seq = ids(&walk(&Rule::Listed, &items, None, 3 * items.len()));
+        for cycle in seq.chunks(items.len()) {
+            prop_assert_eq!(cycle, expected.as_slice());
+        }
+        // Positions really do take precedence over everything else.
+        let positions: Vec<Option<u32>> = sorted.iter().map(|i| i.position).collect();
+        let mut by_position = positions.clone();
+        by_position.sort_by_key(|p| (p.is_none(), *p));
+        prop_assert_eq!(positions, by_position);
     }
 
     #[test]

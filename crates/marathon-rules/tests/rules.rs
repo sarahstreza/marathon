@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{all_rules, clip, episode, ids, show, walk, walk_back};
+use common::{all_rules, at, clip, episode, ids, show, walk, walk_back};
 use marathon_rules::{Cursor, GroupBy, ItemKey, Order, Rule, next, previous};
 
 #[test]
@@ -67,6 +67,81 @@ fn ordered_continues_after_a_removed_current_item() {
     assert_eq!(step.item.id, "s1e3");
     let back = previous(&Rule::Ordered, &without_e2, &at_e2.cursor).unwrap();
     assert_eq!(back.item.id, "s1e1");
+}
+
+/// A hand-picked running order: a two-parter from season 2, then a special,
+/// then a whole folder of essays (sharing one position), then season 1's
+/// opener. Season 1 episode 2 is not listed at all (excluded).
+fn running_order() -> Vec<ItemKey> {
+    vec![
+        at(3, episode(1, 1)),
+        at(2, clip("ess10", "Essays/Ep 10.mkv")),
+        at(0, episode(2, 1)),
+        at(2, clip("ess2", "Essays/Ep 2.mkv")),
+        at(1, clip("special", "Show/Specials/Christmas.mkv")),
+        at(0, episode(2, 2)),
+    ]
+}
+
+#[test]
+fn listed_walks_list_positions_then_loops() {
+    let seq = ids(&walk(&Rule::Listed, &running_order(), None, 8));
+    assert_eq!(
+        seq,
+        [
+            "s2e1", "s2e2", "special", "ess2", "ess10", "s1e1", "s2e1", "s2e2"
+        ]
+    );
+}
+
+#[test]
+fn listed_previous_wraps_to_the_last_item() {
+    let items = running_order();
+    let first = next(&Rule::Listed, &items, None).unwrap();
+    let back = previous(&Rule::Listed, &items, &first.cursor).unwrap();
+    assert_eq!(back.item.id, "s1e1");
+}
+
+#[test]
+fn listed_continues_after_a_removed_current_item() {
+    let items = running_order();
+    let at_special = walk(&Rule::Listed, &items, None, 3).pop().unwrap();
+    assert_eq!(at_special.item.id, "special");
+    let without: Vec<ItemKey> = items.into_iter().filter(|i| i.id != "special").collect();
+    let step = next(&Rule::Listed, &without, Some(&at_special.cursor)).unwrap();
+    assert_eq!(step.item.id, "ess2");
+    let back = previous(&Rule::Listed, &without, &at_special.cursor).unwrap();
+    assert_eq!(back.item.id, "s2e2");
+}
+
+#[test]
+fn listed_follows_an_item_moved_to_a_new_place() {
+    let items = running_order();
+    let at_special = walk(&Rule::Listed, &items, None, 3).pop().unwrap();
+    // The config is edited to move the special to the very end.
+    let reordered: Vec<ItemKey> = items
+        .into_iter()
+        .map(|i| if i.id == "special" { at(9, i) } else { i })
+        .collect();
+    let step = next(&Rule::Listed, &reordered, Some(&at_special.cursor)).unwrap();
+    assert_eq!(step.item.id, "s2e1", "wraps around from the new last place");
+}
+
+#[test]
+fn listed_puts_unlisted_items_last_in_natural_order() {
+    let items = vec![episode(1, 2), at(0, episode(2, 1)), episode(1, 1)];
+    let seq = ids(&walk(&Rule::Listed, &items, None, 3));
+    assert_eq!(seq, ["s2e1", "s1e1", "s1e2"]);
+}
+
+#[test]
+fn ordered_ignores_list_positions() {
+    let seq = ids(&walk(&Rule::Ordered, &running_order(), None, 6));
+    assert_eq!(
+        seq,
+        ["ess2", "ess10", "special", "s1e1", "s2e1", "s2e2"],
+        "unparsed items (no show) first, then by season and episode"
+    );
 }
 
 #[test]

@@ -367,6 +367,7 @@ mod tests {
                 show: p.show,
                 season: p.season,
                 episode: p.episode,
+                position: None,
             }
         };
         let mut items = [
@@ -390,6 +391,7 @@ mod tests {
                 show: p.show,
                 season: p.season,
                 episode: p.episode,
+                position: None,
             }
         };
         let mut items = [

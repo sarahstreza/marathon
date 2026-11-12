@@ -28,6 +28,12 @@ pub struct ItemKey {
     /// Parsed episode number, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub episode: Option<u32>,
+    /// Where the channel's definition lists this item, for the `listed`
+    /// rule: lower plays first. Items the definition lists together (such
+    /// as the contents of one folder) share a position. Other rules ignore
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
 }
 
 impl ItemKey {
@@ -56,6 +62,14 @@ impl ItemKey {
         .then_with(|| cmp_option_by(self.episode, other.episode, |a, b| a.cmp(&b), false))
         .then_with(|| natural_cmp(&self.path, &other.path))
         .then_with(|| self.id.cmp(&other.id))
+    }
+
+    /// Compares two items in listed order, the order the `listed` rule
+    /// plays them in: by [`position`](Self::position) (items without one
+    /// last), then in [natural order](Self::natural_order).
+    pub fn listed_order(&self, other: &Self) -> Ordering {
+        cmp_option_by(self.position, other.position, |a, b| a.cmp(&b), false)
+            .then_with(|| self.natural_order(other))
     }
 }
 
@@ -88,6 +102,7 @@ mod tests {
             show: season.map(|_| "Show".into()),
             season,
             episode,
+            position: None,
         }
     }
 
@@ -132,6 +147,24 @@ mod tests {
         ];
         items.sort_by(ItemKey::natural_order);
         assert_eq!(items[0].id, "e1");
+    }
+
+    #[test]
+    fn listed_order_puts_position_before_metadata() {
+        let at = |id: &str, season, position| ItemKey {
+            position,
+            ..item(id, id, Some(season), Some(1))
+        };
+        let mut items = [
+            at("unlisted", 1, None),
+            at("s1-second", 1, Some(1)),
+            at("s3-first", 3, Some(0)),
+            at("s2-second", 2, Some(1)),
+        ];
+        items.sort_by(ItemKey::listed_order);
+        let ids: Vec<_> = items.iter().map(|i| i.id.as_str()).collect();
+        // Shared positions fall back to natural order; no position is last.
+        assert_eq!(ids, ["s3-first", "s1-second", "s2-second", "unlisted"]);
     }
 
     #[test]

@@ -158,23 +158,55 @@ async fn channel_membership_follows_selectors() {
     let env = TestEnv::new();
     let app = env.app().await;
 
-    let members = |channel: &'static str| {
-        let app = app.clone();
-        async move {
-            let rows: Vec<(String,)> = sqlx::query_as(
-                "SELECT i.path FROM channel_items ci JOIN items i ON i.id = ci.item_id
-                 WHERE ci.channel_id = ? ORDER BY i.path",
-            )
-            .bind(channel)
-            .fetch_all(app.db().pool())
-            .await
-            .unwrap();
-            rows.into_iter().map(|(p,)| p).collect::<Vec<_>>()
-        }
-    };
+    let members = |channel: &'static str| members(&app, channel);
     // Non-recursive: Season folders yes, Extras no.
     assert_eq!(members("show").await, VIDEOS[..4].to_vec());
     // Recursive: includes the subfolder.
     assert_eq!(members("essays").await.len(), 3);
     assert!(members("empty").await.is_empty());
+}
+
+/// The library paths of a channel's items, sorted.
+async fn members(app: &marathon_server::App, channel: &str) -> Vec<String> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT i.path FROM channel_items ci JOIN items i ON i.id = ci.item_id
+         WHERE ci.channel_id = ? ORDER BY i.path",
+    )
+    .bind(channel)
+    .fetch_all(app.db().pool())
+    .await
+    .unwrap();
+    rows.into_iter().map(|(p,)| p).collect()
+}
+
+#[tokio::test]
+async fn files_and_exclude_pick_exactly_what_they_name() {
+    let env = TestEnv::new();
+    let channels = r#"
+[[channel]]
+id = "picked"
+number = 1
+name = "Picked"
+items = [
+  { source = "lib", path = "TV/Test Show", files = [
+      "Season 2/Test Show - S02E02 - Cliffhanger.mkv",
+      "Extras/Blooper Reel.mkv",
+      "Season 1/No Such Episode.mkv",
+  ] },
+  { source = "lib", path = "Essays", recursive = true, exclude = ["Deep Dives"] },
+]
+rule = { kind = "listed" }
+"#;
+    let config =
+        marathon_server::config::Config::from_toml_str(&env.config_toml("", channels)).unwrap();
+    let app = marathon_server::App::open(config).await.unwrap();
+    assert_eq!(
+        members(&app, "picked").await,
+        [
+            "Essays/Ep 10 - Difficulty Curves.mp4",
+            "Essays/Ep 2 - Pacing.mkv",
+            "TV/Test Show/Extras/Blooper Reel.mkv",
+            "TV/Test Show/Season 2/Test Show - S02E02 - Cliffhanger.mkv",
+        ]
+    );
 }

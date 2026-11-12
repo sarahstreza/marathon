@@ -182,6 +182,8 @@ async fn sync_definitions(db: &Db, config: &Config) -> Result<(), crate::Error> 
                         "source": s.source,
                         "path": s.relative_path(),
                         "recursive": s.recursive,
+                        "files": s.relative_files(),
+                        "exclude": s.relative_exclude(),
                         "weight": s.weight,
                     }),
                     Entry::Channel(c) => serde_json::json!({

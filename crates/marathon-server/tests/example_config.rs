@@ -33,7 +33,8 @@ fn example_config_parses() {
             "essays",
             "essayists",
             "contrapoints",
-            "folding-ideas"
+            "folding-ideas",
+            "doctor-who"
         ]
     );
 
@@ -57,6 +58,12 @@ fn example_config_parses() {
     assert_eq!(essays.rule, Rule::Shuffled);
     assert_eq!(essays.items.len(), 2);
     assert!(essays.selectors().all(|s| s.recursive && s.source == "nas"));
+
+    let doctor_who = config.channel("doctor-who").unwrap();
+    assert_eq!(doctor_who.rule, Rule::Listed);
+    let selectors: Vec<_> = doctor_who.selectors().collect();
+    assert_eq!(selectors[0].files.len(), 4);
+    assert_eq!(selectors[1].exclude.len(), 1);
 }
 
 #[test]
