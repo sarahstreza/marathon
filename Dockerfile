@@ -6,12 +6,16 @@
 #   docker build -t marathond .
 #
 # The binary is linked statically against musl (Alpine's Rust targets musl
-# and links statically by default), so the final image is distroless/static:
-# no shell, no libc, just CA certificates (for https Jellyfin servers), a
-# nonroot user, and the binary. SQLite is bundled into the binary
-# (sqlx's `sqlite-bundled`), so nothing else is needed at run time.
+# and links statically by default). SQLite is bundled into it (sqlx's
+# `sqlite-bundled`). The runtime image is plain Alpine: the binary, CA
+# certificates (for https Jellyfin servers), and su-exec plus a small
+# entrypoint (docker/entrypoint.sh) that runs the server as PUID:PGID,
+# 1000:1000 unless overridden:
+#
+#   docker run -e PUID=1001 -e PGID=1001 ...
 
 ARG RUST_VERSION=1.95
+ARG ALPINE_VERSION=3.24
 
 FROM docker.io/library/rust:${RUST_VERSION}-alpine AS build
 # A C toolchain for the bundled SQLite and aws-lc (rustls' crypto).
@@ -31,16 +35,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p marathond \
     && install -D target/release/marathond /out/marathond
-# distroless has no shell to create directories with; make the data
-# directory here so a fresh named volume inherits nonroot's ownership.
-RUN install -d /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM docker.io/library/alpine:${ALPINE_VERSION}
+RUN apk add --no-cache ca-certificates su-exec \
+    && install -d -o 1000 -g 1000 /data
 COPY --from=build /out/marathond /usr/local/bin/marathond
-COPY --from=build --chown=65532:65532 /out/data /data
+COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# The uid and gid marathond runs as; the entrypoint re-owns /data to match.
+# Numeric ids need no passwd entry.
+ENV PUID=1000 \
+    PGID=1000
 VOLUME ["/data"]
 EXPOSE 7878
-ENTRYPOINT ["/usr/local/bin/marathond"]
+# Starts as root only long enough to fix /data's ownership and drop to
+# PUID:PGID; see docker/entrypoint.sh.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 # Mount a config at /config/config.toml (docker/config.toml is a starting
 # point). Inside a container loopback is unreachable from outside, so
 # listen on every interface. That requires server.token in the config; marathond

@@ -1,8 +1,10 @@
 # Keep the build context to what `cargo build -p marathond` needs. Cargo
 # still reads every workspace member's manifest, so crates/ and apps/ stay
-# whole; everything else is excluded.
+# whole. The image also needs its entrypoint script; everything else is
+# excluded.
 *
 !Cargo.toml
 !Cargo.lock
 !crates/
 !apps/
+!docker/entrypoint.sh
