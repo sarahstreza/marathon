@@ -167,6 +167,34 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7878/api/v1/channels)
           [ "$code" = 401 ] || { echo "without a token: HTTP $code, want 401"; exit 1; }
           curl -sf -H 'Authorization: Bearer change-me' http://127.0.0.1:7878/api/v1/channels
+          # /proc/1 is owned by PID 1's uid:gid, i.e. marathond's.
+          ids=$(docker exec marathond stat -c %u:%g /proc/1)
+          [ "$ids" = 1000:1000 ] || { echo "runs as $ids, want 1000:1000"; exit 1; }
+      # The entrypoint drops to PUID:PGID and re-owns a bind-mounted /data.
+      - name: Runs as PUID:PGID and owns /data
+        run: |
+          set -euo pipefail
+          mkdir /tmp/data
+          docker run -d --name marathond-ids -e PUID=1234 -e PGID=2345 \
+            -v "$PWD/docker/config.toml:/config/config.toml:ro" \
+            -v /tmp/data:/data marathond:ci
+          for _ in $(seq 30); do
+            [ -e /tmp/data/marathon.db ] && break
+            sleep 1
+          done
+          ids=$(docker exec marathond-ids stat -c %u:%g /proc/1)
+          [ "$ids" = 1234:2345 ] || { echo "runs as $ids, want 1234:2345"; exit 1; }
+          bad=$(find /tmp/data \! \( -uid 1234 -gid 2345 \))
+          [ -z "$bad" ] || { echo "not owned by 1234:2345:"; ls -ln /tmp/data; exit 1; }
+      - name: Rejects a non-numeric PUID
+        run: |
+          set -uo pipefail
+          if out=$(docker run --rm -e PUID=nobody marathond:ci 2>&1); then
+            echo "started with PUID=nobody:"; echo "$out"; exit 1
+          fi
+          echo "$out" | grep -q 'PUID must be a numeric id'
       - name: Server log
         if: always()
-        run: docker logs marathond || true
+        run: |
+          docker logs marathond || true
+          docker logs marathond-ids || true
