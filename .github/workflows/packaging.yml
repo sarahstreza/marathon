@@ -83,6 +83,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
+      # Evaluate every system's outputs (no builds), so a system nixpkgs
+      # drops, or a package that only evaluates on Linux, shows up here.
+      - run: nix flake check --all-systems --no-build
       - run: nix flake check --print-build-logs
       - run: nix build --print-build-logs .#marathon-desktop .#marathond
       - run: ./result/bin/marathon-desktop --version && ./result-1/bin/marathond --version

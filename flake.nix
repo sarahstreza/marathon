@@ -20,15 +20,13 @@
     let
       lib = nixpkgs.lib;
       # The player is Linux-only here (macOS is milestone M9); the server
-      # builds anywhere Rust does.
+      # also builds on Apple Silicon Macs. Not on Intel Macs: nixpkgs 26.11
+      # dropped x86_64-darwin.
       linux = [
         "x86_64-linux"
         "aarch64-linux"
       ];
-      darwin = [
-        "x86_64-darwin"
-        "aarch64-darwin"
-      ];
+      darwin = [ "aarch64-darwin" ];
       forAll = systems: f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
