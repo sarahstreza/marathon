@@ -96,6 +96,9 @@ rustPlatform.buildRustPackage {
     patchelf --add-rpath ${lib.makeLibraryPath dlopened} $out/bin/marathon-desktop
   '';
 
+  # Read by ./marathon-desktop-wrapped.nix to allow the `cec` options.
+  passthru = { inherit withCec; };
+
   meta = {
     description = "Watch your video collection as TV channels (desktop player)";
     homepage = "https://github.com/sarahstreza/marathon";

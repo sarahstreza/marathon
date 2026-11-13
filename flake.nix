@@ -6,8 +6,13 @@
 #   nix build .#marathond            # the server
 #   nix run .# -- --server http://tv-server:7878
 #
+# `marathond` and `marathon-desktop` are wrappers configured with typed
+# settings, e.g. `marathond.override { settings = { ... }; }`; the
+# `-unwrapped` packages are the plain builds (nix/overlay.nix).
+#
 # NixOS: import `inputs.marathon.nixosModules.default` and set
-# `services.marathond` (nix/module.nix documents the options).
+# `services.marathond` (nix/module.nix documents the options). Or add
+# `inputs.marathon.overlays.default` to nixpkgs for the packages.
 {
   description = "Marathon: watch your video collection as TV channels";
 
@@ -39,17 +44,26 @@
       packages = lib.genAttrs lib.systems.flakeExposed (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          # The overlay's packages, without instantiating nixpkgs again.
+          scope = lib.makeScope nixpkgs.legacyPackages.${system}.newScope (
+            final: import ./nix/overlay.nix final nixpkgs.legacyPackages.${system}
+          );
         in
-        lib.optionalAttrs (lib.elem system linux) rec {
-          marathon-desktop = pkgs.callPackage ./nix/marathon-desktop.nix { };
-          marathon-desktop-cec = marathon-desktop.override { withCec = true; };
-          default = marathon-desktop;
+        lib.optionalAttrs (lib.elem system linux) {
+          inherit (scope)
+            marathon-desktop
+            marathon-desktop-unwrapped
+            marathon-desktop-cec
+            marathon-desktop-cec-unwrapped
+            ;
+          default = scope.marathon-desktop;
         }
         // lib.optionalAttrs (lib.elem system (linux ++ darwin)) {
-          marathond = pkgs.callPackage ./nix/marathond.nix { };
+          inherit (scope) marathond marathond-unwrapped;
         }
       );
+
+      overlays.default = import ./nix/overlay.nix;
 
       nixosModules.default =
         { pkgs, ... }:
@@ -60,16 +74,21 @@
               system = pkgs.stdenv.hostPlatform.system;
             in
             lib.mkDefault (
-              self.packages.${system}.marathond
+              self.packages.${system}.marathond-unwrapped
                 or (throw "Marathon's flake has no marathond for ${system}; set services.marathond.package")
             );
         };
 
-      # `nix flake check` runs the module's VM test (Linux only).
+      # `nix flake check` runs the module's VM test and the wrapper checks
+      # (Linux only).
       checks = forAll linux (pkgs: {
         module = import ./nix/module-test.nix {
           inherit pkgs;
           module = self.nixosModules.default;
+        };
+        wrappers = import ./nix/wrappers-test.nix {
+          inherit pkgs;
+          inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) marathond marathon-desktop-cec;
         };
       });
 
