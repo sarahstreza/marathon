@@ -216,10 +216,14 @@ async fn an_unreachable_jellyfin_is_a_clear_error_and_files_keep_working() {
     let now: Now = server.json("/api/v1/channels/office/now").await;
     server.stop().await;
 
-    // ...then with it gone (nothing listens on its port any more).
-    let url = jellyfin.url();
+    // ...then with it gone. Not by reusing the mock's port: once freed,
+    // another test's mock or server can be given it, and then "gone"
+    // Jellyfin answers. A socket bound to a port but not listening on it
+    // refuses connections, and holds the port for this test.
     drop(jellyfin);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let refusing = tokio::net::TcpSocket::new_v4().unwrap();
+    refusing.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let url = format!("http://{}/jellyfin", refusing.local_addr().unwrap());
     let server = Running::start(&env, &url, KEY).await;
 
     // The server started; the scan reports the source and keeps its items.
