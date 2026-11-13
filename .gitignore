@@ -7,3 +7,8 @@
 *.webm
 *.srt
 /docker/marathon.toml
+
+# Packaging build outputs (docs/PACKAGING.md).
+/packaging/flatpak/.build/
+/packaging/flatpak/.flatpak-builder/
+/packaging/flatpak/cargo-sources.json
