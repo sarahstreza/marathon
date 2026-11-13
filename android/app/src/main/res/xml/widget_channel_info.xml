@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The single-channel widget (widget/ChannelWidget.kt). Adding one opens
+     ChannelWidgetConfigActivity to pick the channel; on Android 12+ a
+     long press can pick another (reconfigurable). -->
+<!-- Attributes newer than minSdk (previews, target cells, reconfigurable)
+     are ignored by older launchers, which is fine. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:configure="marathon.android.widget.ChannelWidgetConfigActivity"
+    android:description="@string/widget_channel_description"
+    android:initialLayout="@layout/widget_channel"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:previewLayout="@layout/widget_channel"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="3"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen"
+    tools:ignore="UnusedAttribute"
+    android:widgetFeatures="reconfigurable" />

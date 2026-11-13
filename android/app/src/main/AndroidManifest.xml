@@ -42,5 +42,29 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_channel_list_info" />
         </receiver>
+
+        <receiver
+            android:name=".widget.ChannelWidget"
+            android:exported="false"
+            android:label="@string/widget_channel_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_channel_info" />
+        </receiver>
+
+        <!-- Picks a single-channel widget's channel. The launcher starts it,
+             so it is exported; it only saves a choice for a widget ID. -->
+        <activity
+            android:name=".widget.ChannelWidgetConfigActivity"
+            android:exported="true"
+            android:label="@string/widget_pick_title"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

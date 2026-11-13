@@ -46,7 +46,7 @@ object Widgets {
     const val EXTRA_CHANNEL_ID = "tv.marathon.android.CHANNEL_ID"
 
     /** The providers of every kind of widget, for [refreshAll]. */
-    private val PROVIDERS = listOf(ChannelListWidget::class.java)
+    private val PROVIDERS = listOf(ChannelListWidget::class.java, ChannelWidget::class.java)
 
     /**
      * The channels to show, as the guide lists them: hidden channels left

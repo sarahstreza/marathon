@@ -27,11 +27,24 @@ class Settings(context: Context) {
         }
     }
 
+    /** The channel (ID) a single-channel widget shows, if one was chosen. */
+    fun widgetChannel(appWidgetId: Int): String? = prefs.getString(widgetKey(appWidgetId), null)
+
+    fun saveWidgetChannel(appWidgetId: Int, channelId: String) {
+        prefs.edit { putString(widgetKey(appWidgetId), channelId) }
+    }
+
+    fun forgetWidget(appWidgetId: Int) {
+        prefs.edit { remove(widgetKey(appWidgetId)) }
+    }
+
     /** This installation's client ID (PLAN.md §8), created on first use. */
     fun clientId(): String = ClientId.loadOrCreate(clientIdFile)
 
     private companion object {
         const val KEY_URL = "server_url"
         const val KEY_TOKEN = "server_token"
+
+        fun widgetKey(appWidgetId: Int) = "widget_channel_$appWidgetId"
     }
 }
