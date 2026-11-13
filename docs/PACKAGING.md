@@ -137,6 +137,11 @@ nix run .# -- --server http://tv-server:7878 --windowed
 nix build .#marathond
 ```
 
+`packages` has an entry for every system flakes expose
+(`lib.systems.flakeExposed`, e.g. `i686-linux`), holding only what is
+supported there; elsewhere it is empty. So a flake that walks every system,
+such as a NUR, can test `marathon.packages.${system} ? marathond`.
+
 It follows `nixos-unstable`, because the workspace needs Rust 1.95 and the
 current stable NixOS release has an older one. Update the pin with `nix
 flake update`. The packages build with nixpkgs' `buildRustPackage`
