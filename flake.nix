@@ -19,9 +19,9 @@
     { self, nixpkgs }:
     let
       lib = nixpkgs.lib;
-      # The player is Linux-only here (macOS is milestone M9); the server
-      # also builds on Apple Silicon Macs. Not on Intel Macs: nixpkgs 26.11
-      # dropped x86_64-darwin.
+      # Where each package is built and tested. The player is Linux-only
+      # (macOS is milestone M9); the server also builds on Apple Silicon
+      # Macs. Not on Intel Macs: nixpkgs 26.11 dropped x86_64-darwin.
       linux = [
         "x86_64-linux"
         "aarch64-linux"
@@ -30,26 +30,39 @@
       forAll = systems: f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      packages =
-        lib.recursiveUpdate
-          (forAll linux (pkgs: rec {
-            marathon-desktop = pkgs.callPackage ./nix/marathon-desktop.nix { };
-            marathon-desktop-cec = marathon-desktop.override { withCec = true; };
-            default = marathon-desktop;
-          }))
-          (
-            forAll (linux ++ darwin) (pkgs: {
-              marathond = pkgs.callPackage ./nix/marathond.nix { };
-            })
-          );
+      # Defined for every system flakes expose (i686-linux, riscv64-linux,
+      # ...), holding only the packages supported there, so a flake that
+      # walks all systems (a NUR, say) can check
+      # `marathon.packages.${system} ? marathond` instead of failing on a
+      # missing attribute. Only the attribute set is per-system; nothing
+      # outside `linux`/`darwin` is evaluated or built.
+      packages = lib.genAttrs lib.systems.flakeExposed (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        lib.optionalAttrs (lib.elem system linux) rec {
+          marathon-desktop = pkgs.callPackage ./nix/marathon-desktop.nix { };
+          marathon-desktop-cec = marathon-desktop.override { withCec = true; };
+          default = marathon-desktop;
+        }
+        // lib.optionalAttrs (lib.elem system (linux ++ darwin)) {
+          marathond = pkgs.callPackage ./nix/marathond.nix { };
+        }
+      );
 
       nixosModules.default =
         { pkgs, ... }:
         {
           imports = [ ./nix/module.nix ];
           services.marathond.package =
-            lib.mkDefault
-              self.packages.${pkgs.stdenv.hostPlatform.system}.marathond;
+            let
+              system = pkgs.stdenv.hostPlatform.system;
+            in
+            lib.mkDefault (
+              self.packages.${system}.marathond
+                or (throw "Marathon's flake has no marathond for ${system}; set services.marathond.package")
+            );
         };
 
       # `nix flake check` runs the module's VM test (Linux only).
