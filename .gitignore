@@ -13,3 +13,5 @@
 /packaging/flatpak/.flatpak-builder/
 /packaging/flatpak/cargo-sources.json
 /packaging/appimage/.build/
+/result
+/result-*
