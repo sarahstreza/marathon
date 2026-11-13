@@ -4,18 +4,25 @@
 #     enable = true;
 #     settings = {
 #       server.bind = "0.0.0.0:7878";
-#       source = [ { id = "nas"; kind = "filesystem"; root = "/srv/video"; } ];
-#       channel = [ ... ];
+#       server.tokenFile = "/run/secrets/marathon-token";
+#       source.nas = { kind = "filesystem"; root = "/srv/video"; };
+#       channel.office = {
+#         number = 1;
+#         name = "The Office";
+#         items = [ { source = "nas"; path = "TV/The Office (US)"; } ];
+#         rule.kind = "ordered";
+#       };
 #     };
 #     openFirewall = true;
 #   };
 #
-# `settings` is the config file (config/example.toml) as Nix; it lands in
-# the world-readable Nix store, so secrets (server.token, Jellyfin API
-# keys) belong in a config file outside the store instead: set
-# `configFile` to its path (from agenix, sops-nix, or written by hand). It
-# can be readable by root only; systemd hands it to the service as a
-# credential.
+# `settings` has the typed options in ./settings.nix, checked when the
+# system is built. The config file it becomes lands in the world-readable
+# Nix store, so secrets go in files instead (`server.tokenFile`, a
+# source's `apiKeyFile`); they can be readable by root only, since systemd
+# hands them to the service as credentials, and they are filled in each
+# time it starts. Or set `configFile` to a complete config file of your
+# own.
 #
 # The service runs as a transient user (DynamicUser) with its database in
 # /var/lib/marathon. It can read world-readable media; add groups that own
@@ -29,9 +36,38 @@
 
 let
   cfg = config.services.marathond;
-  toml = pkgs.formats.toml { };
-  configFile =
-    if cfg.configFile != null then cfg.configFile else toml.generate "marathon.toml" cfg.settings;
+  marathonLib = import ./lib.nix { inherit lib pkgs; };
+  useSettings = cfg.configFile == null;
+  generated = marathonLib.toConfig cfg.settings;
+
+  # Each secret file becomes a credential named after its placeholder's
+  # position, read by the start script from the credentials directory.
+  secrets = lib.imap0 (i: s: s // { credential = "secret-${toString i}"; }) generated.secrets;
+
+  start = pkgs.writeShellScript "marathond-start" ''
+    set -euo pipefail
+    ${
+      if !useSettings then
+        ''
+          exec ${lib.getExe cfg.package} --config "$CREDENTIALS_DIRECTORY/config.toml"
+        ''
+      else if secrets == [ ] then
+        ''
+          exec ${lib.getExe cfg.package} --config ${generated.file}
+        ''
+      else
+        ''
+          ${marathonLib.renderSnippet {
+            config = generated // {
+              inherit secrets;
+            };
+            secretPath = s: ''"$CREDENTIALS_DIRECTORY/${s.credential}"'';
+          }}
+          exec ${lib.getExe cfg.package} --config /dev/fd/3
+        ''
+    }
+  '';
+
   # The port to open: the last `:`-separated field of server.bind.
   port = lib.toInt (lib.last (lib.splitString ":" cfg.settings.server.bind));
 in
@@ -41,33 +77,22 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      description = "The marathond package. The flake's module sets this to its own build.";
+      description = ''
+        The marathond package, unwrapped: the module writes the config
+        itself. The flake's module sets this to its `marathond-unwrapped`.
+      '';
     };
 
     settings = lib.mkOption {
-      type = lib.types.submodule {
-        freeformType = toml.type;
-        options.server = {
-          bind = lib.mkOption {
-            type = lib.types.str;
-            default = "127.0.0.1:7878";
-            description = ''
-              Address and port to listen on. A non-loopback address needs
-              `server.token`, which should then come from `configFile`.
-            '';
-          };
-          data_dir = lib.mkOption {
-            type = lib.types.str;
-            default = "/var/lib/marathon";
-            description = "Where the SQLite database lives. Must be under /var/lib/marathon.";
-          };
-        };
-      };
+      type = lib.types.submodule [
+        ./settings.nix
+        { server.data_dir = lib.mkDefault "/var/lib/marathon"; }
+      ];
       default = { };
       description = ''
-        marathond's configuration, written to a TOML file in the Nix store.
-        See config/example.toml in the Marathon repository for the format.
-        Ignored when `configFile` is set.
+        marathond's configuration; see nix/settings.nix in the Marathon
+        repository for the options and config/example.toml for what they
+        mean. Ignored when `configFile` is set.
       '';
     };
 
@@ -76,9 +101,9 @@ in
       default = null;
       example = "/run/secrets/marathon.toml";
       description = ''
-        A complete config file to use instead of `settings`, for configs
-        that hold secrets. Its `server.data_dir` must be /var/lib/marathon
-        (or a directory under it).
+        A complete config file to use instead of `settings`. It may be
+        readable by root only. Its `server.data_dir` must be
+        /var/lib/marathon (or a directory under it).
       '';
     };
 
@@ -99,13 +124,16 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = cfg.openFirewall -> cfg.configFile == null;
+        assertion = cfg.openFirewall -> useSettings;
         message = ''
           services.marathond.openFirewall reads the port from `settings`; with
           `configFile`, open the port with networking.firewall.allowedTCPPorts.
         '';
       }
-    ];
+    ]
+    ++ lib.optionals useSettings (
+      map (a: a // { message = "services.marathond.settings: ${a.message}"; }) cfg.settings.assertions
+    );
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ port ];
 
@@ -114,12 +142,17 @@ in
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
-      # Restart when the config changes.
-      restartTriggers = [ configFile ];
+      # Restart when the config changes. (Secret files changing on their
+      # own need a restart by hand.)
+      restartTriggers = [ start ];
 
       serviceConfig = {
-        ExecStart = "${lib.getExe cfg.package} --config \${CREDENTIALS_DIRECTORY}/config.toml";
-        LoadCredential = [ "config.toml:${configFile}" ];
+        ExecStart = start;
+        LoadCredential =
+          if useSettings then
+            map (s: "${s.credential}:${s.file}") secrets
+          else
+            [ "config.toml:${cfg.configFile}" ];
         Restart = "on-failure";
 
         DynamicUser = true;
