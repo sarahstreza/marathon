@@ -175,6 +175,9 @@ makes "passes the same scenarios as the Rust version" checkable by machine.
 
 One `ComponentActivity`, fullscreen and immersive, with the screen kept on
 while it is in front.
+The Watch screen is landscape (`sensorLandscape`, so either way up); Setup
+follows the device, since typing a URL is easier in portrait. Android 16+
+ignores orientation requests on large screens, which is fine there.
 
 - **Setup screen:** server URL and optional token, stored in private
   `SharedPreferences`, with a Test button that calls `/health`. It shows on first launch, or when the
@@ -303,6 +306,8 @@ These need a person and a device. They are restated here with steps:
 2. **Phone, touch:** swipe up and down to change channel, double-tap to seek,
    tap for info and the controls, use the guide. Check that every action in §9 that
    applies on a phone is reachable.
+   With the phone held upright, the Watch screen turns to landscape (either
+   way up), and Setup (the controls' Server button) follows the phone again.
 3. **Phone, M3 criteria:** each channel resumes within a few seconds of where it
    was left, and an episode ending advances on its own with a gap under about 1 s.
    Force-stopping and relaunching resumes the last channel. The sidecar `.srt`

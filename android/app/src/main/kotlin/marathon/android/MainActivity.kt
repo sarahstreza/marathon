@@ -4,6 +4,7 @@
 // lifecycle").
 package marathon.android
 
+import android.content.pm.ActivityInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -18,6 +19,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -123,6 +125,14 @@ class MainActivity : ComponentActivity() {
                             connect(server)
                         }
                     } else {
+                        // Video is landscape: either way up, following the
+                        // sensor. Setup (a form with a keyboard) follows
+                        // the device. Android 16+ ignores this on large
+                        // screens (tablets, foldables), where any shape works.
+                        DisposableEffect(Unit) {
+                            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            onDispose { requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+                        }
                         WatchScreen(s, pendingDigits, onSettings = {
                             setupMessage = null
                             showSetup = true
