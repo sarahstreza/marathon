@@ -269,6 +269,31 @@ touch can set it. There is no `Action` for it, so neither a TV remote nor
 the HTTP API can; PLAN.md lists a sleep timer after the MVP, and a
 cross-client one would belong in the Tuner.
 
+### Widgets
+
+A home-screen widget, drawn with plain `RemoteViews` (package
+`marathon.android.widget`):
+
+- **Channels** (`ChannelListWidget`): every channel as the guide lists
+  it (hidden ones left out, in number order), with what each is on.
+  Tapping a channel opens Marathon tuned to it; tapping the title opens
+  Marathon as it was. The scrolling list uses `RemoteViewsCompat` from
+  `androidx.core:core-remoteviews`, which works back to API 26 without a
+  `RemoteViewsService` of our own.
+
+It reads `GET /channels` from the saved server, on a background thread
+under `goAsync`. It refreshes when added, every 30 minutes (the shortest
+period Android allows), when the app goes to the background (so it's
+up to date when you're back on the home screen), and after the server is
+changed in Setup. If the server can't be reached it says so, and
+tapping still opens the app.
+
+A widget's channel reaches the app as an extra on the intent
+(`Widgets.EXTRA_CHANNEL_ID`). `MainActivity` turns it into
+`GoToChannelId` from the input `widget`, in `onNewIntent` when it is
+already running. On a cold start the Tuner first tunes the channel it
+would anyway, then switches, because the action queues behind its start.
+
 ---
 
 ## Control channel and lifecycle
@@ -368,8 +393,15 @@ These need a person and a device. They are restated here with steps:
    playback pauses, `examples/tail-events.sh` shows `paused`, and the
    screen turns off after the device's screen timeout. Wake and unlock:
    still paused. Press play: the screen stays on again.
-9. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
-   test library doesn't generate one, so supply it.
-10. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
+9. **Widgets:** add the Channels widget: it lists the channels with what
+   each is on, scrolls, and resizes. Tap a channel with Marathon closed,
+   then again while it's playing another channel (and while it's in
+   picture-in-picture): each opens Marathon on that channel. Watch
+   something, go Home: the widget shows the new item within a few
+   seconds. Stop marathond and force a refresh (go Home again): the widget
+   says it can't reach the server.
+10. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
+    test library doesn't generate one, so supply it.
+11. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
     §9 action, including the guide. This needs TV hardware, or a working TV
     emulator (see the known issue above).

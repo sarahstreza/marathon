@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The channel-list widget (widget/ChannelListWidget.kt). Android
+     refreshes it every 30 minutes, its shortest period; the app also
+     refreshes it on going to the background. -->
+<!-- Attributes newer than minSdk (previews, target cells, reconfigurable)
+     are ignored by older launchers, which is fine. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:description="@string/widget_list_description"
+    android:initialLayout="@layout/widget_channel_list"
+    android:minWidth="180dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="80dp"
+    android:previewLayout="@layout/widget_channel_list"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="3"
+    android:targetCellHeight="3"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen"
+    tools:ignore="UnusedAttribute" />

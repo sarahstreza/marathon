@@ -51,6 +51,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
     implementation(libs.core.ktx)
+    implementation(libs.core.remoteviews)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.libmpv)
 

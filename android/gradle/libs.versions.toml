@@ -11,6 +11,9 @@ openapi-generator = "7.27.0"
 compose-bom = "2026.09.00"
 activity-compose = "1.13.0"
 core-ktx = "1.19.1"
+# RemoteViewsCompat: collection widgets back to API 26 (June 2024; stable,
+# a finished compatibility shim).
+core-remoteviews = "1.1.0"
 lifecycle = "2.11.0"
 # mpv-android's native libraries + MPVLib JNI wrapper, from Maven Central.
 libmpv = "1.0.0"
@@ -27,6 +30,7 @@ compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
+core-remoteviews = { module = "androidx.core:core-remoteviews", version.ref = "core-remoteviews" }
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 libmpv = { module = "dev.jdtech.mpv:libmpv", version.ref = "libmpv" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }

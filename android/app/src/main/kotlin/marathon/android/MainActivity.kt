@@ -4,6 +4,7 @@
 // lifecycle"), unless the video shrinks into picture-in-picture (Pip).
 package marathon.android
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.media.AudioAttributes
@@ -33,6 +34,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import marathon.android.ui.SetupScreen
 import marathon.android.ui.WatchScreen
+import marathon.android.widget.Widgets
 import marathon.core.Action
 import marathon.core.ApiError
 import marathon.core.Log
@@ -157,6 +159,7 @@ class MainActivity : ComponentActivity() {
                         SetupScreen(settings.server(), setupMessage, clientId) { server ->
                             settings.save(server)
                             connect(server)
+                            Widgets.refreshAll(this)
                         }
                     } else {
                         // Video is landscape: either way up, following the
@@ -198,6 +201,29 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // A widget's channel. Only on a fresh start: after the process is
+        // recreated, the intent is the one that started it long ago.
+        if (savedInstanceState == null) openChannelFrom(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        openChannelFrom(intent)
+    }
+
+    /**
+     * Tunes to the channel a widget asked for ([Widgets.EXTRA_CHANNEL_ID]),
+     * if any. On a cold start the Tuner first tunes where it would anyway
+     * (the action queues behind its start), then switches.
+     */
+    private fun openChannelFrom(intent: Intent) {
+        val channelId = intent.getStringExtra(Widgets.EXTRA_CHANNEL_ID) ?: return
+        intent.removeExtra(Widgets.EXTRA_CHANNEL_ID)
+        // No server yet: Setup is showing, and the widget can't have a channel anyway.
+        val s = session ?: return
+        showSetup = false
+        s.send(Action.GoToChannelId(channelId), "widget")
     }
 
     /** The Sleep button: steps the timer to its next duration, or off. */
@@ -241,6 +267,8 @@ class MainActivity : ComponentActivity() {
         // Going to the background: pause and report progress (PLAN.md M10).
         session?.send(Action.Standby, "lifecycle")
         getSystemService(AudioManager::class.java).abandonAudioFocusRequest(audioFocus)
+        // Back on the home screen: show what the channels are on now.
+        Widgets.refreshAll(this)
         super.onStop()
     }
 

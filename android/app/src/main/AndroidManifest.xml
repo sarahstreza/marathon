@@ -28,5 +28,19 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Home-screen widgets (widget/). Android itself sends their
+             updates, so they need not be exported. -->
+        <receiver
+            android:name=".widget.ChannelListWidget"
+            android:exported="false"
+            android:label="@string/widget_list_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_channel_list_info" />
+        </receiver>
     </application>
 </manifest>

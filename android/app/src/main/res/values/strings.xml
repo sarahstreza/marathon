@@ -7,4 +7,13 @@
     <string name="pip_pause">Pause</string>
     <string name="pip_channel_up">Channel up</string>
     <string name="pip_channel_down">Channel down</string>
+
+    <!-- Widgets -->
+    <string name="widget_list_label">Marathon channels</string>
+    <string name="widget_list_description">Every channel and what it\'s on. Tap one to watch it.</string>
+    <string name="widget_loading">Loading channels…</string>
+    <string name="widget_not_set_up">Open Marathon to choose a server.</string>
+    <string name="widget_no_channels">No channels.</string>
+    <string name="widget_failed">Can\'t reach the server.\nTap to open Marathon.</string>
+    <string name="widget_nothing_on">Nothing to play</string>
 </resources>
