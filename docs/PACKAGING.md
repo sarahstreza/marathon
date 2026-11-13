@@ -112,7 +112,11 @@ linuxdeploy normally leaves libjack to the host, but libmpv links it and
 most desktops don't have it, so the script bundles it. With no JACK server
 running, mpv plays through PipeWire or PulseAudio as usual.
 
-Running the AppImage needs FUSE 2 (`libfuse2`), or set
+The host therefore needs what any desktop has: libGL/libEGL, libgbm,
+libdrm, X11 (libX11, libxcb), libwayland-client, fontconfig, freetype,
+fribidi, harfbuzz, ALSA, PipeWire's client library, libusb, libva, and
+libvdpau. CI checks that list in a clean Ubuntu 24.04. Running the
+AppImage also needs FUSE 2 (`libfuse2`), or set
 `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 ## Nix

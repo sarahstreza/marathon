@@ -46,9 +46,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: packaging/appimage/build.sh
-      - name: Starts and reports its version
+      # The runner is a server image without the desktop libraries an
+      # AppImage takes from the host (GL, X11, Wayland, PipeWire, ...), so
+      # check it in a clean Ubuntu with just those (and no JACK, which
+      # the AppImage bundles): every library resolves, and it starts.
+      - name: Runs on a desktop
         run: |
-          APPIMAGE_EXTRACT_AND_RUN=1 packaging/appimage/.build/Marathon-*-x86_64.AppImage --version
+          docker run --rm -v "$PWD/packaging/appimage/.build:/b:ro" ubuntu:24.04 sh -euc '
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+              libgl1 libegl1 libgbm1 libdrm2 libx11-6 libx11-xcb1 libxcb1 \
+              libwayland-client0 libfontconfig1 libfreetype6 libfribidi0 \
+              libharfbuzz0b libasound2t64 libpipewire-0.3-0t64 libusb-1.0-0 \
+              libva2 libva-drm2 libva-wayland2 libva-x11-2 libvdpau1 > /dev/null
+            cd /tmp
+            /b/Marathon-*-x86_64.AppImage --appimage-extract > /dev/null
+            missing=$(LD_LIBRARY_PATH=squashfs-root/usr/lib \
+              ldd squashfs-root/usr/bin/marathon-desktop squashfs-root/usr/lib/*.so* 2> /dev/null \
+              | grep "not found" | sort -u)
+            if [ -n "$missing" ]; then echo "missing libraries:"; echo "$missing"; exit 1; fi
+            APPIMAGE_EXTRACT_AND_RUN=1 /b/Marathon-*-x86_64.AppImage --version
+          '
       - uses: actions/upload-artifact@v7
         with:
           name: marathon-appimage
