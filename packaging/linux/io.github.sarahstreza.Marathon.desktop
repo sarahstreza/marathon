@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Marathon
+GenericName=Television Player
+Comment=Watch your video collection as TV channels
+# Starts fullscreen and connects to the server in MARATHON_SERVER
+# (default http://127.0.0.1:7878), with the token in MARATHON_TOKEN.
+Exec=marathon-desktop
+Icon=io.github.sarahstreza.Marathon
+Terminal=false
+Categories=AudioVideo;Video;Player;TV;
+Keywords=tv;channels;video;player;television;
+SingleMainWindow=true

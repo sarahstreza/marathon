@@ -1,0 +1,88 @@
+# Builds the Linux packages (docs/PACKAGING.md): the Flatpak, the AppImage,
+# and the Nix packages. Slower than CI (the Flatpak compiles libmpv, the
+# AppImage and Nix builds compile the workspace with fat LTO or from
+# scratch), so it runs only when packaging could have changed, on main,
+# and by hand.
+name: Packaging
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - nix/**
+      - packaging/**
+      - .github/workflows/packaging.yml
+  workflow_dispatch:
+
+jobs:
+  flatpak:
+    name: flatpak
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          # With recommends: flatpak-builder runs the tools it recommends
+          # (eu-strip from elfutils, git, patch, bsdtar, xz, zstd).
+          sudo apt-get install -y flatpak flatpak-builder appstream
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Metainfo is valid
+        run: appstreamcli validate --no-net packaging/linux/io.github.sarahstreza.Marathon.metainfo.xml
+      - run: packaging/flatpak/build.sh --bundle
+      - uses: actions/upload-artifact@v7
+        with:
+          name: marathon-flatpak
+          path: packaging/flatpak/.build/marathon.flatpak
+          if-no-files-found: error
+          # The outputs are under .build/, which upload-artifact counts as hidden.
+          include-hidden-files: true
+
+  appimage:
+    name: appimage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: packaging/appimage/build.sh
+      # The runner is a server image without the desktop libraries an
+      # AppImage takes from the host (GL, X11, Wayland, PipeWire, ...), so
+      # check it in a clean Ubuntu with just those (and no JACK, which
+      # the AppImage bundles): every library resolves, and it starts.
+      - name: Runs on a desktop
+        run: |
+          docker run --rm -v "$PWD/packaging/appimage/.build:/b:ro" ubuntu:24.04 sh -euc '
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+              libgl1 libegl1 libgbm1 libdrm2 libx11-6 libx11-xcb1 libxcb1 \
+              libwayland-client0 libfontconfig1 libfreetype6 libfribidi0 \
+              libharfbuzz0b libasound2t64 libpipewire-0.3-0t64 libusb-1.0-0 \
+              libva2 libva-drm2 libva-wayland2 libva-x11-2 libvdpau1 > /dev/null
+            cd /tmp
+            /b/Marathon-*-x86_64.AppImage --appimage-extract > /dev/null
+            missing=$(LD_LIBRARY_PATH=squashfs-root/usr/lib \
+              ldd squashfs-root/usr/bin/marathon-desktop squashfs-root/usr/lib/*.so* 2> /dev/null \
+              | grep "not found" | sort -u)
+            if [ -n "$missing" ]; then echo "missing libraries:"; echo "$missing"; exit 1; fi
+            APPIMAGE_EXTRACT_AND_RUN=1 /b/Marathon-*-x86_64.AppImage --version
+          '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: marathon-appimage
+          path: packaging/appimage/.build/Marathon-*.AppImage
+          if-no-files-found: error
+          # The outputs are under .build/, which upload-artifact counts as hidden.
+          include-hidden-files: true
+
+  nix:
+    name: nix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check --print-build-logs
+      - run: nix build --print-build-logs .#marathon-desktop .#marathond
+      - run: ./result/bin/marathon-desktop --version && ./result-1/bin/marathond --version

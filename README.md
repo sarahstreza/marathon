@@ -45,8 +45,11 @@ milestone checklists. Read it before changing anything substantial.
 | `docs/CONTROLS.md` | User guide: watching Marathon and its controls |
 | `docs/REMOTE.md` | Remote control and events over the API |
 | `docs/ANDROID.md` | Android client (M10): design, toolchain setup, manual checks |
+| `docs/PACKAGING.md` | Building the Flatpak, AppImage, and Nix packages |
 | `docs/TODO.md` | Known follow-ups |
 | `examples/` | Shell scripts that send actions and follow events |
+| `packaging/` | Flatpak manifest, AppImage script, and the desktop entry, metainfo, and icon they share |
+| `flake.nix`, `nix/` | Nix packages for the player and server, and a NixOS module for the server |
 
 Which crates may depend on which is fixed by PLAN.md §4 and enforced by
 `apps/marathond/tests/dependency_graph.rs`.
@@ -229,6 +232,14 @@ the scripts in [`examples/`](examples).
 
 The client stores only a random client ID, in `marathon/client-id` under
 the user's config directory (`~/.config` on Linux).
+
+### Packages
+
+The player can be built as a Flatpak (`packaging/flatpak/build.sh`), an
+AppImage (`packaging/appimage/build.sh`), or with Nix (`nix build
+.#marathon-desktop`); the server with Nix (`nix build .#marathond`, plus a
+NixOS module) or as the container image above. See
+[`docs/PACKAGING.md`](docs/PACKAGING.md).
 
 ### Test media
 
