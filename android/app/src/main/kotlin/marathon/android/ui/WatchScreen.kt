@@ -5,13 +5,19 @@ package marathon.android.ui
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.mandatorySystemGestures
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,6 +37,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import marathon.android.MpvPlayer
 import marathon.android.Session
+import marathon.android.SystemEdges
 import marathon.android.Touch
 import marathon.core.Action
 
@@ -40,12 +47,28 @@ private const val CONTROLS_HOLD_MS = 4_000L
 /** How far a vertical swipe must travel to change channel. */
 private val SWIPE_THRESHOLD = 80.dp
 
+/**
+ * The least depth of the top and bottom strips where swipes belong to the
+ * system. With the system bars hidden, or with three-button navigation,
+ * the reported gesture insets can be zero, but a swipe from the very edge
+ * still reveals the bars.
+ */
+private val MIN_SYSTEM_EDGE = 32.dp
+
 @Composable
 fun WatchScreen(session: Session, pendingDigits: String, onSettings: () -> Unit) {
     val send = { action: Action -> session.send(action, "touch") }
     // Bumped by each tap; the strip shows for a while after the latest.
     var controlsShownAt by remember { mutableIntStateOf(0) }
-    val thresholdPx = with(LocalDensity.current) { SWIPE_THRESHOLD.toPx() }
+    val density = LocalDensity.current
+    val thresholdPx = with(density) { SWIPE_THRESHOLD.toPx() }
+    val gestures = WindowInsets.systemGestures
+    val mandatory = WindowInsets.mandatorySystemGestures
+    val minEdge = with(density) { MIN_SYSTEM_EDGE.toPx() }
+    val edges = SystemEdges(
+        top = maxOf(minEdge, gestures.getTop(density).toFloat(), mandatory.getTop(density).toFloat()),
+        bottom = maxOf(minEdge, gestures.getBottom(density).toFloat(), mandatory.getBottom(density).toFloat()),
+    )
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         VideoSurface(session.player)
@@ -61,13 +84,24 @@ fun WatchScreen(session: Session, pendingDigits: String, onSettings: () -> Unit)
                         onDoubleTap = { send(Touch.doubleTap(it.x, size.width.toFloat())) },
                     )
                 }
-                .pointerInput(Unit) {
-                    var dy = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { dy = 0f },
-                        onDragEnd = { Touch.swipe(dy, thresholdPx)?.let(send) },
-                        onVerticalDrag = { _, amount -> dy += amount },
-                    )
+                .pointerInput(edges) {
+                    // A vertical drag, judged from where the finger first
+                    // went down (not where it passed touch slop), so a
+                    // swipe up from the bottom edge counts as the system's.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val slop = awaitVerticalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                            ?: return@awaitEachGesture
+                        var lastY = slop.position.y
+                        val lifted = verticalDrag(slop.id) { change ->
+                            lastY = change.position.y
+                            change.consume()
+                        }
+                        if (lifted) {
+                            val dy = lastY - down.position.y
+                            Touch.swipe(down.position.y, dy, size.height.toFloat(), thresholdPx, edges)?.let(send)
+                        }
+                    }
                 },
         )
         OverlayLayer(session.overlay, session.changes, session.player, pendingDigits)

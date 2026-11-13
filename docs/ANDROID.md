@@ -229,7 +229,7 @@ unmapped, and keys Marathon doesn't use (volume, Home) go to the system.
 
 | Gesture | Action |
 |---|---|
-| Swipe up / down | `ChannelUp` / `ChannelDown` |
+| Swipe up / down | `ChannelUp` / `ChannelDown`, unless it starts in the system's gesture strip at the top or bottom edge (going home, recent apps, notifications) |
 | Double-tap right / left third | `SeekRelative(+10)` / `SeekRelative(-10)` |
 | Double-tap the middle | `TogglePause` |
 | Single tap | `ShowInfo`, and reveals a control strip for 4 s |
@@ -308,6 +308,10 @@ These need a person and a device. They are restated here with steps:
    applies on a phone is reachable.
    With the phone held upright, the Watch screen turns to landscape (either
    way up), and Setup (the controls' Server button) follows the phone again.
+   With gesture navigation, swiping up from the bottom edge goes home (or
+   to picture-in-picture) and swiping down from the top edge shows the
+   status bar, without changing channel; the same swipes from mid-screen
+   still change channel. Repeat with three-button navigation.
 3. **Phone, M3 criteria:** each channel resumes within a few seconds of where it
    was left, and an episode ending advances on its own with a gap under about 1 s.
    Force-stopping and relaunching resumes the last channel. The sidecar `.srt`

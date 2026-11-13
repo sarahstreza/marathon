@@ -160,9 +160,15 @@ class InputTest {
 
     @Test
     fun touch_gestures() {
-        assertEquals(Action.ChannelUp, Touch.swipe(-200f, 100f))
-        assertEquals(Action.ChannelDown, Touch.swipe(150f, 100f))
-        assertNull(Touch.swipe(-50f, 100f))
+        val edges = SystemEdges(top = 40f, bottom = 60f)
+        fun swipe(startY: Float, dy: Float) = Touch.swipe(startY, dy, height = 1000f, thresholdPx = 100f, edges = edges)
+        assertEquals(Action.ChannelUp, swipe(500f, -200f))
+        assertEquals(Action.ChannelDown, swipe(500f, 150f))
+        assertNull(swipe(500f, -50f))
+        assertEquals(Action.ChannelUp, swipe(940f, -200f), "just above the bottom edge")
+        assertEquals(Action.ChannelDown, swipe(40f, 200f), "just below the top edge")
+        assertNull(swipe(950f, -400f), "from the bottom edge: going home or to recent apps")
+        assertNull(swipe(10f, 400f), "from the top edge: pulling down notifications")
         assertEquals(Action.SeekRelative(-10), Touch.doubleTap(10f, 900f))
         assertEquals(Action.TogglePause, Touch.doubleTap(450f, 900f))
         assertEquals(Action.SeekRelative(10), Touch.doubleTap(890f, 900f))

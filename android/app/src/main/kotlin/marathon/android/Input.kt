@@ -140,10 +140,24 @@ class KeyInput(
     }
 }
 
+/**
+ * The strips along the top and bottom of the screen where the system
+ * takes swipes: the bottom one goes home or to recent apps, the top one
+ * pulls down notifications. In pixels from each edge.
+ */
+data class SystemEdges(val top: Float, val bottom: Float)
+
 /** Touch gestures (phones), as pure functions of where and how far. */
 object Touch {
-    /** A vertical swipe of [dy] pixels (up is negative), or null if under [thresholdPx]. */
-    fun swipe(dy: Float, thresholdPx: Float): Action? = when {
+    /**
+     * A vertical swipe that started [startY] pixels down a view [height]
+     * tall and moved [dy] pixels (up is negative), or null if it moved
+     * less than [thresholdPx] or started in one of the system's [edges]:
+     * there the viewer is reaching for the system (home, recent apps,
+     * notifications), not changing channel.
+     */
+    fun swipe(startY: Float, dy: Float, height: Float, thresholdPx: Float, edges: SystemEdges): Action? = when {
+        startY < edges.top || startY > height - edges.bottom -> null
         dy <= -thresholdPx -> Action.ChannelUp
         dy >= thresholdPx -> Action.ChannelDown
         else -> null
