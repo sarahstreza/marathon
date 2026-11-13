@@ -233,7 +233,7 @@ unmapped, and keys Marathon doesn't use (volume, Home) go to the system.
 | Double-tap right / left third | `SeekRelative(+10)` / `SeekRelative(-10)` |
 | Double-tap the middle | `TogglePause` |
 | Single tap | `ShowInfo`, and reveals a control strip for 4 s |
-| Control strip | Guide, previous item, pause/play, next item, subtitles, server settings |
+| Control strip | Guide, previous item, pause/play, next item, subtitles, sleep timer, server settings |
 | System back | Clears a half-typed channel number, then `Back` (closes the guide or banner), then leaves the app |
 
 Back reaches apps through the back dispatcher, not `onKeyDown` (the
@@ -252,6 +252,22 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
 - `INTERNET`, plus a network security config that allows cleartext HTTP.
   marathond on a LAN or a Tailscale address is plain HTTP, and PLAN.md leaves
   TLS to the user's VPN.
+
+### Sleep timer
+
+The control strip's Sleep button steps through 15, 30, 45, 60, 90, and
+120 minutes and back to off, restarting from now on each press (a toast
+confirms the choice, and the button shows the minutes left). A minute
+before the end a toast warns; at the end Marathon sends `Pause` (input
+`sleep-timer`), which reports progress, and stops keeping the screen on,
+so the phone or TV can turn its screen off as usual. Pausing, not
+standby, so that unlocking the phone later doesn't resume by itself.
+The screen is kept on again once playback resumes.
+
+The timer lives in the activity (`SleepTimer`, unit tested), so only
+touch can set it. There is no `Action` for it, so neither a TV remote nor
+the HTTP API can; PLAN.md lists a sleep timer after the MVP, and a
+cross-client one would belong in the Tuner.
 
 ---
 
@@ -345,8 +361,15 @@ These need a person and a device. They are restated here with steps:
    progress (`examples/tail-events.sh` shows `standby`). From the Setup
    screen, Home does not open a window. On Android 8–11, repeat with the
    Home button.
-8. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
+8. **Sleep timer:** tap, then tap Sleep: a toast says 15 min and the
+   button reads `Sleep 15m`. Tap it again a few times to step through the
+   durations and back to off. Set 15 minutes and wait (or temporarily
+   shorten `DURATIONS_MIN`): a minute before, a toast warns; at the end
+   playback pauses, `examples/tail-events.sh` shows `paused`, and the
+   screen turns off after the device's screen timeout. Wake and unlock:
+   still paused. Press play: the screen stays on again.
+9. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
    test library doesn't generate one, so supply it.
-9. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
-   §9 action, including the guide. This needs TV hardware, or a working TV
-   emulator (see the known issue above).
+10. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
+    §9 action, including the guide. This needs TV hardware, or a working TV
+    emulator (see the known issue above).

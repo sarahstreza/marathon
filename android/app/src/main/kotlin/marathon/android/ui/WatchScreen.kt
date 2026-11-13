@@ -58,7 +58,15 @@ private val SWIPE_THRESHOLD = 80.dp
 private val MIN_SYSTEM_EDGE = 32.dp
 
 @Composable
-fun WatchScreen(session: Session, pendingDigits: String, inPip: Boolean, onSettings: () -> Unit) {
+fun WatchScreen(
+    session: Session,
+    pendingDigits: String,
+    inPip: Boolean,
+    /** The Sleep button's label (read while drawing, so it may read state). */
+    sleepLabel: () -> String,
+    onSleep: () -> Unit,
+    onSettings: () -> Unit,
+) {
     val send = { action: Action -> session.send(action, "touch") }
     // Bumped by each tap; the strip shows for a while after the latest.
     var controlsShownAt by remember { mutableIntStateOf(0) }
@@ -115,7 +123,17 @@ fun WatchScreen(session: Session, pendingDigits: String, inPip: Boolean, onSetti
                     visible = 0
                 }
                 if (visible == 1) {
-                    ControlStrip(send = send, onSettings = onSettings, modifier = Modifier.align(Alignment.TopCenter))
+                    ControlStrip(
+                        send = send,
+                        sleepLabel = sleepLabel(),
+                        onSleep = {
+                            onSleep()
+                            // Keep the strip up while stepping through the durations.
+                            controlsShownAt += 1
+                        },
+                        onSettings = onSettings,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    )
                 }
             }
         }
@@ -123,7 +141,7 @@ fun WatchScreen(session: Session, pendingDigits: String, inPip: Boolean, onSetti
 }
 
 @Composable
-private fun ControlStrip(send: (Action) -> Unit, onSettings: () -> Unit, modifier: Modifier) {
+private fun ControlStrip(send: (Action) -> Unit, sleepLabel: String, onSleep: () -> Unit, onSettings: () -> Unit, modifier: Modifier) {
     Row(
         modifier
             .padding(16.dp)
@@ -138,6 +156,7 @@ private fun ControlStrip(send: (Action) -> Unit, onSettings: () -> Unit, modifie
         button("⏯") { send(Action.TogglePause) }
         button("⏭") { send(Action.NextItem) }
         button("Subtitles") { send(Action.ToggleSubtitles) }
+        button(sleepLabel) { onSleep() }
         button("Server") { onSettings() }
     }
 }

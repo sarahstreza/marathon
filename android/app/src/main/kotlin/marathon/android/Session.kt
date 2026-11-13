@@ -78,7 +78,8 @@ class Session(context: Context, server: ServerSettings, clientId: String, onQuit
         player.destroy()
     }
 
-    private fun toast(message: String) {
+    /** Shows [message] in the overlay's toast. Any thread. */
+    fun toast(message: String) {
         overlay.toast(message, SystemClock.nowMs())
         changed()
     }

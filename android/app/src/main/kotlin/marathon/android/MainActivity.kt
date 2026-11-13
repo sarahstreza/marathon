@@ -24,6 +24,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
@@ -50,6 +51,31 @@ class MainActivity : ComponentActivity() {
     private var inPip by mutableStateOf(false)
 
     private val pip by lazy { Pip(this) { session?.send(it, "pip") } }
+
+    /** Bumped when the sleep timer is set or fires, so its button's label redraws. */
+    private var sleepChanged by mutableIntStateOf(0)
+
+    /** The sleep timer paused playback, so the screen may turn off until it resumes. */
+    private var asleep = false
+
+    private val sleepTimer = SleepTimer(
+        schedule = { delayMs, block ->
+            val runnable = Runnable(block)
+            handler.postDelayed(runnable, delayMs)
+            ({ handler.removeCallbacks(runnable) })
+        },
+        nowMs = SystemClock::nowMs,
+        onWarn = { session?.toast("Sleep timer: pausing in a minute") },
+        onSleep = {
+            sleepChanged += 1
+            session?.let {
+                it.send(Action.Pause, "sleep-timer")
+                it.toast("Sleep timer: paused")
+            }
+            asleep = true
+            keepScreenOn(false)
+        },
+    )
 
     private val keys = KeyInput(
         send = { session?.send(it, "keys") },
@@ -95,6 +121,7 @@ class MainActivity : ComponentActivity() {
         settings = Settings(this)
         clientId = settings.clientId()
         goFullscreen()
+        keepScreenOn(true)
         pip.register()
 
         onBackPressedDispatcher.addCallback(
@@ -146,14 +173,38 @@ class MainActivity : ComponentActivity() {
                         val paused by s.player.paused.collectAsState()
                         val aspect by s.player.videoAspect.collectAsState()
                         LaunchedEffect(paused, aspect) { pip.update(watching = true, paused, aspect) }
-                        WatchScreen(s, pendingDigits, inPip, onSettings = {
-                            setupMessage = null
-                            showSetup = true
-                        })
+                        // Playing again after the sleep timer: keep the screen on again.
+                        LaunchedEffect(paused) {
+                            if (!paused && asleep) {
+                                asleep = false
+                                keepScreenOn(true)
+                            }
+                        }
+                        WatchScreen(
+                            s,
+                            pendingDigits,
+                            inPip,
+                            sleepLabel = {
+                                sleepChanged // read, so the label redraws when it changes
+                                SleepTimer.label(sleepTimer.remainingMs())
+                            },
+                            onSleep = ::cycleSleepTimer,
+                            onSettings = {
+                                setupMessage = null
+                                showSetup = true
+                            },
+                        )
                     }
                 }
             }
         }
+    }
+
+    /** The Sleep button: steps the timer to its next duration, or off. */
+    private fun cycleSleepTimer() {
+        val minutes = sleepTimer.cycle()
+        sleepChanged += 1
+        session?.toast(if (minutes == null) "Sleep timer off" else "Sleep timer: $minutes min")
     }
 
     private fun connect(server: ServerSettings) {
@@ -194,6 +245,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        sleepTimer.cancel()
         pip.unregister()
         session?.close()
         session = null
@@ -215,13 +267,21 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) goFullscreen()
     }
 
-    /** Fullscreen and immersive, screen kept on: it's a television. */
+    /** Fullscreen and immersive: it's a television. */
     private fun goFullscreen() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    /** Keeps the screen on while Marathon is in front (it's a television), or lets it sleep. */
+    private fun keepScreenOn(on: Boolean) {
+        if (on) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
