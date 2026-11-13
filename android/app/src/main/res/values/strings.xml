@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Marathon</string>
+
+    <!-- Picture-in-picture controls -->
+    <string name="pip_play">Play</string>
+    <string name="pip_pause">Pause</string>
+    <string name="pip_channel_up">Channel up</string>
+    <string name="pip_channel_down">Channel down</string>
 </resources>

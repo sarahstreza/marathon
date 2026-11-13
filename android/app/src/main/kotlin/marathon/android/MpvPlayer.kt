@@ -27,6 +27,8 @@ package marathon.android
 import android.content.Context
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import marathon.core.Log
 import marathon.core.LoadRequest
 import marathon.core.Player
@@ -50,7 +52,15 @@ class MpvPlayer(
 
     @Volatile private var duration: Double? = null
 
-    @Volatile private var paused = false
+    private val pausedState = MutableStateFlow(false)
+
+    /** Whether mpv is paused, as it changes (for picture-in-picture's play/pause button). */
+    val paused: StateFlow<Boolean> = pausedState
+
+    private val aspectState = MutableStateFlow<Double?>(null)
+
+    /** The video's display aspect ratio (width / height), or null with no video. */
+    val videoAspect: StateFlow<Double?> = aspectState
 
     private val lock = Any()
 
@@ -79,6 +89,7 @@ class MpvPlayer(
         mpv.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
         mpv.observeProperty("eof-reached", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
         mpv.observeProperty("idle-active", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
+        mpv.observeProperty("video-params/aspect", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
     }
 
     // --- Surface (called by the video view on the main thread) ------------
@@ -127,7 +138,7 @@ class MpvPlayer(
         // load, so it never leaks between items.
         mpv.setPropertyString("start", String.format(Locale.ROOT, "%.3f", request.startMs / 1000.0))
         mpv.setPropertyBoolean("pause", false)
-        paused = false
+        pausedState.value = false
         try {
             mpv.command(arrayOf("loadfile", request.url, "replace"))
         } catch (e: RuntimeException) {
@@ -145,10 +156,10 @@ class MpvPlayer(
 
     override fun setPaused(paused: Boolean) {
         mpv.setPropertyBoolean("pause", paused)
-        this.paused = paused
+        pausedState.value = paused
     }
 
-    override fun isPaused(): Boolean = paused
+    override fun isPaused(): Boolean = pausedState.value
 
     override fun seekRelative(seconds: Int) {
         mpv.command(arrayOf("seek", seconds.toString(), "relative"))
@@ -189,6 +200,7 @@ class MpvPlayer(
         when (property) {
             "time-pos" -> timePos = null
             "duration" -> duration = null
+            "video-params/aspect" -> aspectState.value = null
         }
     }
 
@@ -198,12 +210,13 @@ class MpvPlayer(
         when (property) {
             "time-pos" -> timePos = value
             "duration" -> duration = value
+            "video-params/aspect" -> aspectState.value = value.takeIf { it.isFinite() && it > 0 }
         }
     }
 
     override fun eventProperty(property: String, value: Boolean) {
         when (property) {
-            "pause" -> paused = value
+            "pause" -> pausedState.value = value
             "eof-reached" -> if (value) {
                 val ended = synchronized(lock) {
                     loaded.also {

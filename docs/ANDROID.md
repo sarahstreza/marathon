@@ -267,6 +267,18 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
   reports progress, and hides the overlay. `onStart` sends `Action.Wake`, which
   resumes only if standby was what paused it. This reuses Tuner behaviour that
   is already tested, instead of adding new states.
+- **Picture-in-picture.** Leaving the Watch screen for Home or recent apps
+  shrinks the video into a floating window instead (`Pip`). Android 12+
+  does this by itself (`setAutoEnterEnabled`); before that the activity
+  asks from `onUserLeaveHint`. The activity is only paused in the window,
+  never stopped, so playback carries on and nothing is sent to the Tuner.
+  Closing the window stops the activity, which is standby as above;
+  expanding it brings back the full Watch screen. The window follows the
+  video's aspect ratio (mpv's `video-params/aspect`, clamped to Android's
+  2.39:1 limit) and shows only the video, with three buttons: channel
+  down, play/pause, and channel up. They reach the Tuner as Actions from
+  the input `pip`, through a broadcast receiver that only Marathon can
+  send to. Setup never goes into picture-in-picture.
 - **Audio focus.** If another app takes audio focus, Marathon pauses, staying
   polite. It doesn't resume on its own when focus comes back.
 
@@ -320,10 +332,21 @@ These need a person and a device. They are restated here with steps:
    the phone, and `examples/tail-events.sh` shows its events.
 5. **Hand-off:** watch a channel on desktop, quit, and tune to it on the phone.
    It should be on the same item and position. Then check the other direction.
-6. **Background:** pressing Home pauses playback and reports progress. Returning
-   resumes playback.
-7. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
+6. **Background:** with picture-in-picture turned off for Marathon (system
+   settings → Apps → Marathon → Picture-in-picture), pressing Home pauses
+   playback and reports progress. Returning resumes playback.
+7. **Picture-in-picture:** on the Watch screen, go Home (button, or swipe up
+   on gesture navigation). The video shrinks into a window and keeps
+   playing, with no banner or guide. The window's shape matches the video
+   (try a 4:3 item). Its buttons change channel and pause/resume, and the
+   play/pause icon follows the state (including after pausing from
+   `examples/send-action.sh pause`). Expanding the window returns to
+   fullscreen, still playing. Dismissing the window pauses and reports
+   progress (`examples/tail-events.sh` shows `standby`). From the Setup
+   screen, Home does not open a window. On Android 8–11, repeat with the
+   Home button.
+8. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
    test library doesn't generate one, so supply it.
-8. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
+9. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
    §9 action, including the guide. This needs TV hardware, or a working TV
    emulator (see the known issue above).

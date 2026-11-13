@@ -1,5 +1,7 @@
 // The Watch screen: the video, the overlay on top, and (on touch screens)
-// gestures and a control strip that send the same Actions as a remote.
+// gestures and a control strip that send the same Actions as a remote. In
+// picture-in-picture it is just the video: the window is too small for
+// the overlay, and the system draws its own controls (Pip).
 package marathon.android.ui
 
 import android.view.SurfaceHolder
@@ -56,7 +58,7 @@ private val SWIPE_THRESHOLD = 80.dp
 private val MIN_SYSTEM_EDGE = 32.dp
 
 @Composable
-fun WatchScreen(session: Session, pendingDigits: String, onSettings: () -> Unit) {
+fun WatchScreen(session: Session, pendingDigits: String, inPip: Boolean, onSettings: () -> Unit) {
     val send = { action: Action -> session.send(action, "touch") }
     // Bumped by each tap; the strip shows for a while after the latest.
     var controlsShownAt by remember { mutableIntStateOf(0) }
@@ -72,47 +74,49 @@ fun WatchScreen(session: Session, pendingDigits: String, onSettings: () -> Unit)
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         VideoSurface(session.player)
-        Box(
-            Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = {
-                            send(Action.ShowInfo)
-                            controlsShownAt += 1
-                        },
-                        onDoubleTap = { send(Touch.doubleTap(it.x, size.width.toFloat())) },
-                    )
-                }
-                .pointerInput(edges) {
-                    // A vertical drag, judged from where the finger first
-                    // went down (not where it passed touch slop), so a
-                    // swipe up from the bottom edge counts as the system's.
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val slop = awaitVerticalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
-                            ?: return@awaitEachGesture
-                        var lastY = slop.position.y
-                        val lifted = verticalDrag(slop.id) { change ->
-                            lastY = change.position.y
-                            change.consume()
-                        }
-                        if (lifted) {
-                            val dy = lastY - down.position.y
-                            Touch.swipe(down.position.y, dy, size.height.toFloat(), thresholdPx, edges)?.let(send)
-                        }
+        if (!inPip) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                send(Action.ShowInfo)
+                                controlsShownAt += 1
+                            },
+                            onDoubleTap = { send(Touch.doubleTap(it.x, size.width.toFloat())) },
+                        )
                     }
-                },
-        )
-        OverlayLayer(session.overlay, session.changes, session.player, pendingDigits)
-        if (controlsShownAt > 0) {
-            var visible by remember(controlsShownAt) { mutableIntStateOf(1) }
-            LaunchedEffect(controlsShownAt) {
-                delay(CONTROLS_HOLD_MS)
-                visible = 0
-            }
-            if (visible == 1) {
-                ControlStrip(send = send, onSettings = onSettings, modifier = Modifier.align(Alignment.TopCenter))
+                    .pointerInput(edges) {
+                        // A vertical drag, judged from where the finger first
+                        // went down (not where it passed touch slop), so a
+                        // swipe up from the bottom edge counts as the system's.
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val slop = awaitVerticalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                                ?: return@awaitEachGesture
+                            var lastY = slop.position.y
+                            val lifted = verticalDrag(slop.id) { change ->
+                                lastY = change.position.y
+                                change.consume()
+                            }
+                            if (lifted) {
+                                val dy = lastY - down.position.y
+                                Touch.swipe(down.position.y, dy, size.height.toFloat(), thresholdPx, edges)?.let(send)
+                            }
+                        }
+                    },
+            )
+            OverlayLayer(session.overlay, session.changes, session.player, pendingDigits)
+            if (controlsShownAt > 0) {
+                var visible by remember(controlsShownAt) { mutableIntStateOf(1) }
+                LaunchedEffect(controlsShownAt) {
+                    delay(CONTROLS_HOLD_MS)
+                    visible = 0
+                }
+                if (visible == 1) {
+                    ControlStrip(send = send, onSettings = onSettings, modifier = Modifier.align(Alignment.TopCenter))
+                }
             }
         }
     }

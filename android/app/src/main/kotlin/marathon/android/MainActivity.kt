@@ -1,10 +1,11 @@
 // The one activity: Setup until a server is known, then Watch. Remote keys
 // become Actions here (KeyInput); Back goes through the back dispatcher;
 // going to the background is standby (docs/ANDROID.md "Control channel and
-// lifecycle").
+// lifecycle"), unless the video shrinks into picture-in-picture (Pip).
 package marathon.android
 
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -20,6 +21,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -44,6 +47,9 @@ class MainActivity : ComponentActivity() {
     private var setupMessage by mutableStateOf<String?>(null)
     private var showSetup by mutableStateOf(false)
     private var pendingDigits by mutableStateOf("")
+    private var inPip by mutableStateOf(false)
+
+    private val pip by lazy { Pip(this) { session?.send(it, "pip") } }
 
     private val keys = KeyInput(
         send = { session?.send(it, "keys") },
@@ -89,6 +95,7 @@ class MainActivity : ComponentActivity() {
         settings = Settings(this)
         clientId = settings.clientId()
         goFullscreen()
+        pip.register()
 
         onBackPressedDispatcher.addCallback(
             this,
@@ -131,9 +138,15 @@ class MainActivity : ComponentActivity() {
                         // screens (tablets, foldables), where any shape works.
                         DisposableEffect(Unit) {
                             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                            onDispose { requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+                            onDispose {
+                                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                pip.update(watching = false, paused = false, aspect = null)
+                            }
                         }
-                        WatchScreen(s, pendingDigits, onSettings = {
+                        val paused by s.player.paused.collectAsState()
+                        val aspect by s.player.videoAspect.collectAsState()
+                        LaunchedEffect(paused, aspect) { pip.update(watching = true, paused, aspect) }
+                        WatchScreen(s, pendingDigits, inPip, onSettings = {
                             setupMessage = null
                             showSetup = true
                         })
@@ -181,9 +194,20 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        pip.unregister()
         session?.close()
         session = null
         super.onDestroy()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        pip.onUserLeaveHint()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPip = isInPictureInPictureMode
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
