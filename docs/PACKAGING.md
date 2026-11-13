@@ -125,11 +125,14 @@ The flake at the repository root has:
 
 | Output | What |
 |---|---|
-| `packages.<system>.marathon-desktop` (also `default`) | The player (Linux) |
-| `packages.<system>.marathon-desktop-cec` | The player with HDMI-CEC; GPL because of libcec |
-| `packages.<system>.marathond` | The server (Linux and Apple Silicon macOS) |
+| `packages.<system>.marathon-desktop` (also `default`) | The player (Linux), configurable with typed settings |
+| `packages.<system>.marathon-desktop-cec` | The same with HDMI-CEC; GPL because of libcec |
+| `packages.<system>.marathond` | The server (Linux and Apple Silicon macOS), configurable with typed settings |
+| `packages.<system>.*-unwrapped` | The plain builds of each of the above |
+| `overlays.default` | All of these as a nixpkgs overlay |
 | `nixosModules.default` | `services.marathond`, the server as a systemd service |
 | `checks.<system>.module` | A NixOS VM test of the module (`nix flake check`) |
+| `checks.<system>.wrappers` | Tests of the wrapped packages and the settings checks |
 
 ```sh
 nix build .#marathon-desktop
@@ -155,6 +158,96 @@ program can't find the system's driver; run it through
 [nixGL](https://github.com/nix-community/nixGL) (`nixGL marathon-desktop`)
 or use the Flatpak or AppImage instead.
 
+### Configured packages
+
+`marathond` and `marathon-desktop` are wrappers. Override them with
+`settings` and they start already configured; without settings they pass
+everything through and behave like the `-unwrapped` builds. The settings
+are typed Nix options, so a mistake (an unknown rule kind, a filesystem
+source without a `root`, a channel without a number) fails when the
+configuration is evaluated, naming the option, instead of when the
+program starts.
+
+The server's options, in [`nix/settings.nix`](../nix/settings.nix),
+follow the config file ([`config/example.toml`](../config/example.toml))
+key for key, except that sources and channels are attribute sets keyed by
+ID, so another module can change one (`channel.office.number = 5`):
+
+```nix
+marathond.override {
+  settings = {
+    server = {
+      bind = "0.0.0.0:7878";
+      data_dir = "/srv/marathon";
+      tokenFile = "/run/secrets/marathon-token";
+    };
+    source.nas = { kind = "filesystem"; root = "/srv/video"; };
+    source.jellyfin = {
+      kind = "jellyfin";
+      url = "http://jellyfin.lan:8096";
+      apiKeyFile = "/run/secrets/jellyfin-api-key";
+    };
+    channel.office = {
+      number = 1;
+      name = "The Office";
+      items = [ { source = "nas"; path = "TV/The Office (US)"; } ];
+      rule.kind = "ordered";
+    };
+    channel.taskmaster = {
+      number = 6;
+      name = "Taskmaster";
+      items = [ { source = "jellyfin"; path = "Shows/Taskmaster"; } ];
+      rule = { kind = "grouped"; by = "season"; groups = "shuffled"; within = "ordered"; };
+    };
+  };
+}
+```
+
+The player's options, in
+[`nix/desktop-settings.nix`](../nix/desktop-settings.nix), mirror its
+command-line flags: `server`, `tokenFile`, `channel`, `windowed`,
+`clientIdFile`, `cec.*` (on `marathon-desktop-cec` only), `environment`,
+and `extraArgs`. For embedded mode, `embedded.settings` takes the same
+server options as above:
+
+```nix
+marathon-desktop.override {
+  settings = {
+    server = "http://tv-server:7878";
+    tokenFile = "/run/secrets/marathon-token";
+    environment.RUST_LOG = "info";
+  };
+}
+
+marathon-desktop.override {
+  settings.embedded = {
+    enable = true;
+    settings.source.nas = { kind = "filesystem"; root = "/srv/video"; };
+    settings.channel.office = { /* as above */ };
+  };
+}
+```
+
+`environment` values and `server` are defaults: a variable already set when
+the player starts wins. Command-line arguments are added after the
+wrapper's.
+
+**Secrets.** The generated config file is in the world-readable Nix store,
+so secrets have `…File` options: `server.tokenFile`, a Jellyfin source's
+`apiKeyFile`, and the player's `tokenFile`. The file is read every time
+the program starts, so it is never copied into the store. The config file
+in the store holds a placeholder instead, and the wrapper hands the
+program the filled-in config through a file descriptor
+(`--config /dev/fd/3`), so it is never written to disk either. A secret
+file holds one line; a trailing newline is fine. The plain `token` and
+`api_key` options still work, but put the value in the store.
+
+Both wrappers expose what they generated as `passthru`: `settings` (the
+evaluated options) and `configFile` (`embeddedConfigFile` for the player).
+The overlay (`overlays.default`) provides the same packages, so in a NixOS
+or home-manager configuration with it you can write
+`pkgs.marathon-desktop.override { ... }`.
+
 ### The NixOS module
 
 ```nix
@@ -169,18 +262,17 @@ or use the Flatpak or AppImage instead.
           services.marathond = {
             enable = true;
             settings = {
-              server.bind = "127.0.0.1:7878";
-              source = [ { id = "nas"; kind = "filesystem"; root = "/srv/video"; } ];
-              channel = [
-                {
-                  id = "office";
-                  number = 1;
-                  name = "The Office";
-                  items = [ { source = "nas"; path = "TV/The Office (US)"; } ];
-                  rule.kind = "ordered";
-                }
-              ];
+              server.bind = "0.0.0.0:7878";
+              server.tokenFile = "/run/secrets/marathon-token";
+              source.nas = { kind = "filesystem"; root = "/srv/video"; };
+              channel.office = {
+                number = 1;
+                name = "The Office";
+                items = [ { source = "nas"; path = "TV/The Office (US)"; } ];
+                rule.kind = "ordered";
+              };
             };
+            openFirewall = true;
           };
         }
       ];
@@ -189,22 +281,25 @@ or use the Flatpak or AppImage instead.
 }
 ```
 
-`settings` is the TOML config (`config/example.toml`) written as Nix. It
-ends up in the world-readable Nix store, so a config with secrets (a
-`server.token`, which any non-loopback `bind` requires, or a Jellyfin
-`api_key`) should be a file outside the store instead:
+`services.marathond.settings` takes the same typed options as the
+`marathond` package (`server.data_dir` defaults to `/var/lib/marathon`
+here), and a mistake fails the system build with the option's name. Secret
+files (`server.tokenFile`, `apiKeyFile`) may be readable by root only:
+systemd passes them to the service as credentials, and they are filled in
+each time it starts, so changing one needs a `systemctl restart
+marathond`. You can also set `configFile` to a complete config file of
+your own (e.g. from agenix or sops-nix) instead of `settings`:
 
 ```nix
 services.marathond = {
   enable = true;
-  configFile = "/run/secrets/marathon.toml";  # e.g. from agenix or sops-nix
+  configFile = "/run/secrets/marathon.toml";
 };
 networking.firewall.allowedTCPPorts = [ 7878 ];
 ```
 
-The file may be readable by root only; systemd passes it to the service as
-a credential. Its `server.data_dir` must be `/var/lib/marathon`, the
-service's state directory (the default with `settings`).
+That file may be readable by root only as well. Its `server.data_dir`
+must be `/var/lib/marathon`, the service's state directory.
 
 The service runs as a transient system user (`DynamicUser`), can write
 only `/var/lib/marathon`, and can read world-readable media. If the video
