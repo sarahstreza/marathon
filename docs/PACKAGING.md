@@ -107,7 +107,10 @@ libplacebo, and so on. It leaves out the ones that must match the host
 The script also leaves out VA-API and VDPAU: the bundled copies would look
 for GPU drivers at Ubuntu's paths, and on other distros hardware decoding
 would quietly fall back to software. The host's own libva is used
-instead (installed on practically every desktop).
+instead (installed on practically every desktop). JACK goes the other way:
+linuxdeploy normally leaves libjack to the host, but libmpv links it and
+most desktops don't have it, so the script bundles it. With no JACK server
+running, mpv plays through PipeWire or PulseAudio as usual.
 
 Running the AppImage needs FUSE 2 (`libfuse2`), or set
 `APPIMAGE_EXTRACT_AND_RUN=1`.

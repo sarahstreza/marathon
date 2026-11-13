@@ -126,6 +126,17 @@ install -Dm644 "$repo/packaging/linux/$app_id.metainfo.xml" -t "$appdir/usr/shar
 # for drivers at Ubuntu's paths and miss them elsewhere, quietly turning
 # hardware decoding off.
 #
+# JACK goes the other way. The exclude list leaves libjack to the host (a
+# JACK client library should match the JACK server), but libmpv links it
+# directly, and most desktops (stock Ubuntu included) don't have it, so
+# without a bundled copy the AppImage wouldn't start. Bundled, it finds no
+# JACK server and mpv uses PipeWire or PulseAudio instead.
+libjack=$(ldconfig -p | awk '$1 == "libjack.so.0" { print $NF; exit }')
+if [ -z "$libjack" ]; then
+    echo "build.sh: libjack.so.0 not found (libmpv should have pulled it in)" >&2
+    exit 69
+fi
+#
 # APPIMAGE_EXTRACT_AND_RUN: linuxdeploy is itself an AppImage, and
 # containers usually have no FUSE.
 APPIMAGE_EXTRACT_AND_RUN=1 \
@@ -138,6 +149,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 \
     --exclude-library 'libva.so*' \
     --exclude-library 'libva-*.so*' \
     --exclude-library 'libvdpau.so*' \
+    --library "$libjack" \
     --output appimage
 
 echo "Wrote $work/Marathon-$version-$arch.AppImage"
