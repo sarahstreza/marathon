@@ -27,7 +27,9 @@ jobs:
       - name: Install flatpak-builder
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder appstream
+          # With recommends: flatpak-builder runs the tools it recommends
+          # (eu-strip from elfutils, git, patch, bsdtar, xz, zstd).
+          sudo apt-get install -y flatpak flatpak-builder appstream
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
       - name: Metainfo is valid
         run: appstreamcli validate --no-net packaging/linux/io.github.sarahstreza.Marathon.metainfo.xml
