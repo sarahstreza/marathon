@@ -1,0 +1,64 @@
+# Builds the Linux packages (docs/PACKAGING.md): the Flatpak, the AppImage,
+# and the Nix packages. Slower than CI (the Flatpak compiles libmpv, the
+# AppImage and Nix builds compile the workspace with fat LTO or from
+# scratch), so it runs only when packaging could have changed, on main,
+# and by hand.
+name: Packaging
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - nix/**
+      - packaging/**
+      - .github/workflows/packaging.yml
+  workflow_dispatch:
+
+jobs:
+  flatpak:
+    name: flatpak
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder appstream
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Metainfo is valid
+        run: appstreamcli validate --no-net packaging/linux/io.github.sarahstreza.Marathon.metainfo.xml
+      - run: packaging/flatpak/build.sh --bundle
+      - uses: actions/upload-artifact@v7
+        with:
+          name: marathon-flatpak
+          path: packaging/flatpak/.build/marathon.flatpak
+          if-no-files-found: error
+
+  appimage:
+    name: appimage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: packaging/appimage/build.sh
+      - name: Starts and reports its version
+        run: |
+          APPIMAGE_EXTRACT_AND_RUN=1 packaging/appimage/.build/Marathon-*-x86_64.AppImage --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: marathon-appimage
+          path: packaging/appimage/.build/Marathon-*.AppImage
+          if-no-files-found: error
+
+  nix:
+    name: nix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check --print-build-logs
+      - run: nix build --print-build-logs .#marathon-desktop .#marathond
+      - run: ./result/bin/marathon-desktop --version && ./result-1/bin/marathond --version
