@@ -2,4 +2,8 @@
 <resources>
     <color name="marathon_background">#FF14161A</color>
     <color name="marathon_accent">#FFF2A93B</color>
+    <!-- Widgets: the overlay's panel and text colours (ui/Overlay.kt). -->
+    <color name="widget_background">#E014161A</color>
+    <color name="widget_text">#FFFFFFFF</color>
+    <color name="widget_text_secondary">#FFBBBBBB</color>
 </resources>

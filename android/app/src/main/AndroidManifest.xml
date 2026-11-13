@@ -13,17 +13,57 @@
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.Material.NoActionBar">
-        <!-- configChanges: rotating or plugging in a keyboard must not tear
-             down playback; Compose relayouts by itself. -->
+        <!-- configChanges: rotating, plugging in a keyboard, or shrinking
+             into picture-in-picture must not tear down playback; Compose
+             relayouts by itself. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Home-screen widgets (widget/). Android itself sends their
+             updates, so they need not be exported. -->
+        <receiver
+            android:name=".widget.ChannelListWidget"
+            android:exported="false"
+            android:label="@string/widget_list_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_channel_list_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.ChannelWidget"
+            android:exported="false"
+            android:label="@string/widget_channel_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_channel_info" />
+        </receiver>
+
+        <!-- Picks a single-channel widget's channel. The launcher starts it,
+             so it is exported; it only saves a choice for a widget ID. -->
+        <activity
+            android:name=".widget.ChannelWidgetConfigActivity"
+            android:exported="true"
+            android:label="@string/widget_pick_title"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
             </intent-filter>
         </activity>
     </application>

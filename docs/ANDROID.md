@@ -175,6 +175,9 @@ makes "passes the same scenarios as the Rust version" checkable by machine.
 
 One `ComponentActivity`, fullscreen and immersive, with the screen kept on
 while it is in front.
+The Watch screen is landscape (`sensorLandscape`, so either way up); Setup
+follows the device, since typing a URL is easier in portrait. Android 16+
+ignores orientation requests on large screens, which is fine there.
 
 - **Setup screen:** server URL and optional token, stored in private
   `SharedPreferences`, with a Test button that calls `/health`. It shows on first launch, or when the
@@ -226,11 +229,11 @@ unmapped, and keys Marathon doesn't use (volume, Home) go to the system.
 
 | Gesture | Action |
 |---|---|
-| Swipe up / down | `ChannelUp` / `ChannelDown` |
+| Swipe up / down | `ChannelUp` / `ChannelDown`, unless it starts in the system's gesture strip at the top or bottom edge (going home, recent apps, notifications) |
 | Double-tap right / left third | `SeekRelative(+10)` / `SeekRelative(-10)` |
 | Double-tap the middle | `TogglePause` |
 | Single tap | `ShowInfo`, and reveals a control strip for 4 s |
-| Control strip | Guide, previous item, pause/play, next item, subtitles, server settings |
+| Control strip | Guide, previous item, pause/play, next item, subtitles, sleep timer, server settings |
 | System back | Clears a half-typed channel number, then `Back` (closes the guide or banner), then leaves the app |
 
 Back reaches apps through the back dispatcher, not `onKeyDown` (the
@@ -250,6 +253,54 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
   marathond on a LAN or a Tailscale address is plain HTTP, and PLAN.md leaves
   TLS to the user's VPN.
 
+### Sleep timer
+
+The control strip's Sleep button steps through 15, 30, 45, 60, 90, and
+120 minutes and back to off, restarting from now on each press (a toast
+confirms the choice, and the button shows the minutes left). A minute
+before the end a toast warns; at the end Marathon sends `Pause` (input
+`sleep-timer`), which reports progress, and stops keeping the screen on,
+so the phone or TV can turn its screen off as usual. Pausing, not
+standby, so that unlocking the phone later doesn't resume by itself.
+The screen is kept on again once playback resumes.
+
+The timer lives in the activity (`SleepTimer`, unit tested), so only
+touch can set it. There is no `Action` for it, so neither a TV remote nor
+the HTTP API can; PLAN.md lists a sleep timer after the MVP, and a
+cross-client one would belong in the Tuner.
+
+### Widgets
+
+Two home-screen widgets, drawn with plain `RemoteViews` (package
+`marathon.android.widget`):
+
+- **Channels** (`ChannelListWidget`): every channel as the guide lists
+  it (hidden ones left out, in number order), with what each is on.
+  Tapping a channel opens Marathon tuned to it; tapping the title opens
+  Marathon as it was. The scrolling list uses `RemoteViewsCompat` from
+  `androidx.core:core-remoteviews`, which works back to API 26 without a
+  `RemoteViewsService` of our own.
+- **Channel** (`ChannelWidget`): one channel's number, name, and what
+  it's on; tapping it opens Marathon tuned to it. Adding one opens
+  `ChannelWidgetConfigActivity` to pick the channel, which is saved in
+  `Settings` under the widget's ID (and forgotten when the widget is
+  removed). On Android 12+ a long press can pick another
+  (`reconfigurable`). If the channel disappears from the server, the
+  widget says so and tapping it picks another.
+
+Both read `GET /channels` from the saved server, on a background thread
+under `goAsync`. They refresh when added, every 30 minutes (the shortest
+period Android allows), when the app goes to the background (so they're
+up to date when you're back on the home screen), and after the server is
+changed in Setup. If the server can't be reached they say so, and
+tapping still opens the app.
+
+A widget's channel reaches the app as an extra on the intent
+(`Widgets.EXTRA_CHANNEL_ID`). `MainActivity` turns it into
+`GoToChannelId` from the input `widget`, in `onNewIntent` when it is
+already running. On a cold start the Tuner first tunes the channel it
+would anyway, then switches, because the action queues behind its start.
+
 ---
 
 ## Control channel and lifecycle
@@ -264,6 +315,18 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
   reports progress, and hides the overlay. `onStart` sends `Action.Wake`, which
   resumes only if standby was what paused it. This reuses Tuner behaviour that
   is already tested, instead of adding new states.
+- **Picture-in-picture.** Leaving the Watch screen for Home or recent apps
+  shrinks the video into a floating window instead (`Pip`). Android 12+
+  does this by itself (`setAutoEnterEnabled`); before that the activity
+  asks from `onUserLeaveHint`. The activity is only paused in the window,
+  never stopped, so playback carries on and nothing is sent to the Tuner.
+  Closing the window stops the activity, which is standby as above;
+  expanding it brings back the full Watch screen. The window follows the
+  video's aspect ratio (mpv's `video-params/aspect`, clamped to Android's
+  2.39:1 limit) and shows only the video, with three buttons: channel
+  down, play/pause, and channel up. They reach the Tuner as Actions from
+  the input `pip`, through a broadcast receiver that only Marathon can
+  send to. Setup never goes into picture-in-picture.
 - **Audio focus.** If another app takes audio focus, Marathon pauses, staying
   polite. It doesn't resume on its own when focus comes back.
 
@@ -303,6 +366,12 @@ These need a person and a device. They are restated here with steps:
 2. **Phone, touch:** swipe up and down to change channel, double-tap to seek,
    tap for info and the controls, use the guide. Check that every action in §9 that
    applies on a phone is reachable.
+   With the phone held upright, the Watch screen turns to landscape (either
+   way up), and Setup (the controls' Server button) follows the phone again.
+   With gesture navigation, swiping up from the bottom edge goes home (or
+   to picture-in-picture) and swiping down from the top edge shows the
+   status bar, without changing channel; the same swipes from mid-screen
+   still change channel. Repeat with three-button navigation.
 3. **Phone, M3 criteria:** each channel resumes within a few seconds of where it
    was left, and an episode ending advances on its own with a gap under about 1 s.
    Force-stopping and relaunching resumes the last channel. The sidecar `.srt`
@@ -311,10 +380,39 @@ These need a person and a device. They are restated here with steps:
    the phone, and `examples/tail-events.sh` shows its events.
 5. **Hand-off:** watch a channel on desktop, quit, and tune to it on the phone.
    It should be on the same item and position. Then check the other direction.
-6. **Background:** pressing Home pauses playback and reports progress. Returning
-   resumes playback.
-7. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
-   test library doesn't generate one, so supply it.
-8. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
-   §9 action, including the guide. This needs TV hardware, or a working TV
-   emulator (see the known issue above).
+6. **Background:** with picture-in-picture turned off for Marathon (system
+   settings → Apps → Marathon → Picture-in-picture), pressing Home pauses
+   playback and reports progress. Returning resumes playback.
+7. **Picture-in-picture:** on the Watch screen, go Home (button, or swipe up
+   on gesture navigation). The video shrinks into a window and keeps
+   playing, with no banner or guide. The window's shape matches the video
+   (try a 4:3 item). Its buttons change channel and pause/resume, and the
+   play/pause icon follows the state (including after pausing from
+   `examples/send-action.sh pause`). Expanding the window returns to
+   fullscreen, still playing. Dismissing the window pauses and reports
+   progress (`examples/tail-events.sh` shows `standby`). From the Setup
+   screen, Home does not open a window. On Android 8–11, repeat with the
+   Home button.
+8. **Sleep timer:** tap, then tap Sleep: a toast says 15 min and the
+   button reads `Sleep 15m`. Tap it again a few times to step through the
+   durations and back to off. Set 15 minutes and wait (or temporarily
+   shorten `DURATIONS_MIN`): a minute before, a toast warns; at the end
+   playback pauses, `examples/tail-events.sh` shows `paused`, and the
+   screen turns off after the device's screen timeout. Wake and unlock:
+   still paused. Press play: the screen stays on again.
+9. **Widgets:** add the Channels widget: it lists the channels with what
+   each is on, scrolls, and resizes. Tap a channel with Marathon closed,
+   then again while it's playing another channel (and while it's in
+   picture-in-picture): each opens Marathon on that channel. Add a Channel
+   widget: the picker lists the channels, and backing out of it cancels
+   adding the widget. Pick one; the widget shows it, and tapping it tunes
+   there. Add a second Channel widget for another channel and check that
+   each opens its own. Watch something, go Home: both widgets show the
+   new item within a few seconds. Stop marathond and force a refresh (go
+   Home again): the widgets say they can't reach the server. On Android
+   12+, long-press a Channel widget and reconfigure it.
+10. **Codec:** a 10-bit HEVC file with PGS subtitles plays with subtitles. The
+    test library doesn't generate one, so supply it.
+11. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
+    §9 action, including the guide. This needs TV hardware, or a working TV
+    emulator (see the known issue above).
