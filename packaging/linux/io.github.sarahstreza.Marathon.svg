@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="21 21 66 66">
+  <!-- Marathon's app icon: a television with a play glyph, the same
+       artwork as the Android launcher icon (android/app/src/main/res/
+       drawable/ic_launcher_foreground.xml), on a rounded square of its
+       background colour. This comment stays inside <svg>: icon validators
+       sniff the first bytes for the root element. -->
+  <rect x="21" y="21" width="66" height="66" rx="12" fill="#14161a"/>
+  <g fill="#f2a93b">
+    <path fill-rule="evenodd" d="M33,38h42a4,4 0,0 1,4 4v26a4,4 0,0 1,-4 4H33a4,4 0,0 1,-4 -4V42a4,4 0,0 1,4 -4zM34,43v24h40V43z"/>
+    <path d="M48,48l12,7l-12,7z"/>
+    <path d="M44,75h20v3H44z"/>
+  </g>
+</svg>

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for the desktop player, used by the Flatpak and
+     AppImage builds (and software centres). Validate it with appstreamcli
+     (see .github/workflows/packaging.yml). XML comments can't contain a
+     double hyphen, so no command-line flags here. -->
+<component type="desktop-application">
+  <id>io.github.sarahstreza.Marathon</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Marathon</name>
+  <summary>Watch your video collection as TV channels</summary>
+  <developer id="io.github.sarahstreza">
+    <name>Sarah Streza</name>
+  </developer>
+  <description>
+    <p>
+      Marathon recreates the lean-back experience of television from a
+      personal video collection. You define channels, each a set of videos
+      plus a rule for what plays next. Flip to a channel and it resumes
+      where you left off; let it run and it keeps going.
+    </p>
+    <p>
+      This is the player. It connects to a Marathon server (marathond) on
+      your network, or runs one itself from a config file. It is made for a
+      TV: it starts fullscreen and is driven by keyboard, mouse, or game
+      controller.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.sarahstreza.Marathon.desktop</launchable>
+  <url type="homepage">https://github.com/sarahstreza/marathon</url>
+  <url type="bugtracker">https://github.com/sarahstreza/marathon/issues</url>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+  <releases>
+    <release version="0.1.0" date="2026-11-12">
+      <description>
+        <p>First packaged build.</p>
+      </description>
+    </release>
+  </releases>
+</component>
