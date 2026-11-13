@@ -9,6 +9,7 @@
   lib,
   rustPlatform,
   pkg-config,
+  cacert,
   aws-lc,
   sqlite,
   mpv-unwrapped,
@@ -66,6 +67,10 @@ rustPlatform.buildRustPackage {
   buildFeatures = lib.optional withCec "input-cec";
 
   nativeBuildInputs = [ pkg-config ];
+  # The client-server tests build a reqwest client, which loads the
+  # system's root certificates and fails without any. The build sandbox
+  # has none; cacert's setup hook points SSL_CERT_FILE at its bundle.
+  nativeCheckInputs = [ cacert ];
   # aws-lc (rustls' crypto, via reqwest) and SQLite (sqlx, for embedded
   # mode): the workspace bundles both, but nixpkgs' cargo hook makes their
   # -sys crates link the system copies instead.
