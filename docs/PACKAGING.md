@@ -127,7 +127,7 @@ The flake at the repository root has:
 |---|---|
 | `packages.<system>.marathon-desktop` (also `default`) | The player (Linux) |
 | `packages.<system>.marathon-desktop-cec` | The player with HDMI-CEC; GPL because of libcec |
-| `packages.<system>.marathond` | The server (Linux and macOS) |
+| `packages.<system>.marathond` | The server (Linux and Apple Silicon macOS) |
 | `nixosModules.default` | `services.marathond`, the server as a systemd service |
 | `checks.<system>.module` | A NixOS VM test of the module (`nix flake check`) |
 
