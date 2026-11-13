@@ -39,6 +39,8 @@ jobs:
           name: marathon-flatpak
           path: packaging/flatpak/.build/marathon.flatpak
           if-no-files-found: error
+          # The outputs are under .build/, which upload-artifact counts as hidden.
+          include-hidden-files: true
 
   appimage:
     name: appimage
@@ -72,6 +74,8 @@ jobs:
           name: marathon-appimage
           path: packaging/appimage/.build/Marathon-*.AppImage
           if-no-files-found: error
+          # The outputs are under .build/, which upload-artifact counts as hidden.
+          include-hidden-files: true
 
   nix:
     name: nix
