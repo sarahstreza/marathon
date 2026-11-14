@@ -1,5 +1,5 @@
 //! Integration tests for audio-only mode (PLAN.md M12): probing durations
-//! with ffprobe. These need real media, so they make tiny clips with
+//! with ffprobe, and `GET /audio/{item_id}`. These need real media, so they make tiny clips with
 //! ffmpeg, and skip (passing, with a note on stderr) where ffmpeg or
 //! ffprobe is not installed.
 
@@ -10,6 +10,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use axum::http::StatusCode;
 use common::{CHANNELS, TestEnv, advance, now};
 use marathon_server::App;
 use marathon_server::config::Config;
@@ -183,4 +184,205 @@ async fn nothing_is_probed_with_audio_off() {
         now(&app, "misc").await["item"]["duration_ms"],
         serde_json::Value::Null
     );
+}
+
+// --- GET /audio/{item_id} ----------------------------------------------------
+
+/// What ffprobe says about an audio stream's bytes: codec, channels, and
+/// duration in ms.
+fn probe_bytes(dir: &Path, bytes: &[u8]) -> (String, u32, u64) {
+    let file = dir.join("probe-me.ogg");
+    std::fs::write(&file, bytes).unwrap();
+    let output = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "a:0"])
+        .args([
+            "-show_entries",
+            "stream=codec_name,channels:format=duration",
+        ])
+        .args(["-of", "default=noprint_wrappers=1"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("no {name} in {text}"))
+            .to_owned()
+    };
+    let seconds: f64 = field("duration").parse().unwrap();
+    (
+        field("codec_name"),
+        field("channels").parse().unwrap(),
+        (seconds * 1000.0).round() as u64,
+    )
+}
+
+/// The `misc` clip's item ID.
+async fn clip_id(app: &App) -> String {
+    common::item_id(app, CLIP).await
+}
+
+#[tokio::test]
+async fn audio_streams_stereo_opus_in_ogg_from_any_point() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        return;
+    }
+    let env = TestEnv::new();
+    write_clip(&env, CLIP, 3);
+    let app = app_with_audio(&env, "").await;
+    assert!(app.audio_enabled());
+    let id = clip_id(&app).await;
+
+    let reply = common::get(&app, &format!("/api/v1/audio/{id}"))
+        .send()
+        .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    assert_eq!(reply.header("content-type"), Some("audio/ogg"));
+    assert!(reply.body.starts_with(b"OggS"));
+    let (codec, channels, duration) = probe_bytes(env.dir.path(), &reply.body);
+    assert_eq!((codec.as_str(), channels), ("opus", 2));
+    assert!((2_800..=3_200).contains(&duration), "{duration}");
+
+    let reply = common::get(&app, &format!("/api/v1/audio/{id}?start_ms=2000"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let (_, _, duration) = probe_bytes(env.dir.path(), &reply.body);
+    assert!((800..=1_200).contains(&duration), "{duration}");
+}
+
+#[tokio::test]
+async fn audio_errors() {
+    if !have("ffmpeg") {
+        return;
+    }
+    let env = TestEnv::new();
+    let app = app_with_audio(&env, "").await;
+
+    let reply = common::get(&app, "/api/v1/audio/no-such-item").send().await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    let id = clip_id(&app).await;
+    let reply = common::get(&app, &format!("/api/v1/audio/{id}?start_ms=soon"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+
+    // The test library's fake bytes are not media: ffmpeg makes nothing.
+    let reply = common::get(&app, &format!("/api/v1/audio/{id}"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(reply.error_code(), "upstream");
+
+    std::fs::remove_file(env.library().join(CLIP)).unwrap();
+    let reply = common::get(&app, &format!("/api/v1/audio/{id}"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    let off = env.app().await;
+    let reply = common::get(&off, &format!("/api/v1/audio/{id}"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(reply.error_code(), "unavailable");
+}
+
+#[tokio::test]
+async fn an_item_without_audio_is_a_bad_gateway() {
+    if !have("ffmpeg") {
+        return;
+    }
+    let env = TestEnv::new();
+    let status = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=32x24:r=5:d=1",
+        ])
+        .args(["-c:v", "ffv1"])
+        .arg(env.library().join(CLIP))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let app = app_with_audio(&env, "").await;
+    let id = clip_id(&app).await;
+    let reply = common::get(&app, &format!("/api/v1/audio/{id}"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_GATEWAY);
+    assert!(
+        reply.json::<serde_json::Value>()["message"]
+            .as_str()
+            .unwrap()
+            .contains("ffmpeg")
+    );
+}
+
+/// The processes whose command line mentions `needle` (Linux's /proc).
+/// Zombies have empty command lines, so a killed but unreaped ffmpeg does
+/// not count.
+#[cfg(target_os = "linux")]
+fn processes_mentioning(needle: &str) -> usize {
+    std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|e| std::fs::read(e.path().join("cmdline")).ok())
+        .filter(|cmdline| String::from_utf8_lossy(cmdline).contains(needle))
+        .count()
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn streams_are_limited_and_dropping_one_kills_its_ffmpeg() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    if !have("ffmpeg") {
+        return;
+    }
+    let env = TestEnv::new();
+    // Long enough that ffmpeg is still running when the response is held.
+    write_clip(&env, CLIP, 600);
+    let app = app_with_audio(&env, "max_streams = 1").await;
+    let id = clip_id(&app).await;
+    let open = || {
+        let request = Request::get(format!("/api/v1/audio/{id}"))
+            .body(Body::empty())
+            .unwrap();
+        marathon_server::http::router(app.clone()).oneshot(request)
+    };
+
+    // Held, unread: ffmpeg blocks on the full pipe and keeps running.
+    let held = open().await.unwrap();
+    assert_eq!(held.status(), StatusCode::OK);
+    let library = env.library().display().to_string();
+    assert_eq!(processes_mentioning(&library), 1);
+
+    let busy = open().await.unwrap();
+    assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    drop(held);
+    let mut gone = false;
+    for _ in 0..100 {
+        if processes_mentioning(&library) == 0 {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(gone, "ffmpeg still running after its response was dropped");
+    assert_eq!(open().await.unwrap().status(), StatusCode::OK);
 }

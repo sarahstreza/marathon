@@ -8,6 +8,15 @@
 //! turns it off, the server runs without audio streams and says so in its
 //! log.
 //!
+//! [`Audio::stream`] serves `GET /audio/{item_id}?start_ms=`: ffmpeg
+//! seeks to `start_ms`, keeps the first audio track, downmixes it to
+//! stereo, encodes Opus at `bitrate_kbps`, and writes Ogg to a pipe that
+//! becomes the response body. ffmpeg works as fast as the client reads:
+//! when the client stops reading (paused), TCP backpressure stalls the
+//! pipe and ffmpeg waits. The process is killed when the response is
+//! dropped, which is when the client disconnects. A pipe cannot answer
+//! `Range` requests, so clients seek by asking for a new `start_ms`.
+//!
 //! A piped audio stream has no duration a player can read, yet clients
 //! need one (for the finished threshold, PLAN.md §1, and progress
 //! reports). So while audio is on, the server probes a filesystem item's
@@ -16,17 +25,24 @@
 //! reports durations itself.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use axum::body::{Body, Bytes};
+use axum::http::{HeaderValue, header};
+use axum::response::{IntoResponse, Response};
+use futures_util::{StreamExt, stream};
 use marathon_api::Now;
-use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::{Child, ChildStderr, ChildStdout, Command};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::app::App;
 use crate::config::AudioConfig;
+use crate::error::ApiError;
 use crate::http::safe_join;
 use crate::sources::Source;
 
@@ -38,9 +54,18 @@ const DETECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// container's headers, so this is generous even for a network share.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long ffmpeg may take to produce the first bytes of a stream (it
+/// may have to seek through a Jellyfin stream) before the request fails.
+const FIRST_BYTES_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bytes read from ffmpeg per body chunk: about 2.7 s of 96 kbit/s Opus.
+const CHUNK_BYTES: usize = 32 * 1024;
+
+/// ffmpeg's error output lines logged per stream; the rest are counted.
+const MAX_LOGGED_LINES: usize = 20;
+
 /// The server's audio streaming, when it is available.
 #[derive(Debug)]
-#[expect(dead_code, reason = "read by the audio route, added next")]
 pub(crate) struct Audio {
     /// The ffmpeg program, known to run.
     pub(crate) ffmpeg: PathBuf,
@@ -70,7 +95,7 @@ impl Audio {
             tracing::info!("audio streams are turned off (audio.enabled = false)");
             return None;
         }
-        if let Err(reason) = runs(&config.ffmpeg).await {
+        if let Err(reason) = runs_with_opus(&config.ffmpeg).await {
             let ffmpeg = config.ffmpeg.display();
             if explicit {
                 tracing::warn!(%ffmpeg, %reason, "ffmpeg is not usable; audio streams are off");
@@ -100,6 +125,179 @@ impl Audio {
             unprobeable: Mutex::new(HashSet::new()),
         })
     }
+}
+
+/// Where ffmpeg reads an item from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Input {
+    /// A local file.
+    File(PathBuf),
+    /// An HTTP URL (a Jellyfin stream), with the request headers to send,
+    /// each ending in CRLF.
+    Http { url: String, headers: String },
+}
+
+impl Audio {
+    /// Starts ffmpeg on `input` from `start_ms` and returns the response
+    /// that streams its output (see the module docs).
+    ///
+    /// Fails with `503 unavailable` when `max_streams` are already
+    /// running, and `502 upstream` when ffmpeg produces nothing (the item
+    /// has no audio, or its source is unreadable).
+    pub(crate) async fn stream(&self, input: Input, start_ms: u64) -> Result<Response, ApiError> {
+        let permit = self.streams.clone().try_acquire_owned().map_err(|_| {
+            ApiError::Unavailable(
+                "too many audio streams are running; try again later (audio.max_streams)"
+                    .to_owned(),
+            )
+        })?;
+        let mut child = Command::new(&self.ffmpeg)
+            .args(ffmpeg_args(&input, start_ms, self.bitrate_kbps))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|err| ApiError::Internal(err.into()))?;
+        // Both are `Some`: they were just set to `piped`.
+        let (Some(mut stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            return Err(ApiError::Internal(
+                std::io::Error::other("ffmpeg's output pipes are missing").into(),
+            ));
+        };
+        let errors = tokio::spawn(log_stderr(stderr));
+
+        // Read the first chunk before answering, so a stream that fails
+        // straight away is an error status rather than an empty 200.
+        let mut first = vec![0; CHUNK_BYTES];
+        let read = tokio::time::timeout(FIRST_BYTES_TIMEOUT, stdout.read(&mut first)).await;
+        let n = match read {
+            Err(_) => {
+                return Err(ApiError::Upstream(format!(
+                    "ffmpeg produced no audio within {FIRST_BYTES_TIMEOUT:?}"
+                )));
+            }
+            Ok(Err(err)) => return Err(ApiError::Internal(err.into())),
+            Ok(Ok(n)) => n,
+        };
+        if n == 0 {
+            let _ = child.wait().await;
+            let detail = errors.await.unwrap_or_default();
+            return Err(ApiError::Upstream(format!(
+                "ffmpeg produced no audio for this item: {}",
+                if detail.is_empty() {
+                    "no error given"
+                } else {
+                    &detail
+                }
+            )));
+        }
+        first.truncate(n);
+
+        let rest = stream::unfold(
+            Some(Running {
+                stdout,
+                child,
+                permit,
+            }),
+            next_chunk,
+        );
+        let body = stream::once(async move { Ok(Bytes::from(first)) }).chain(rest);
+        Ok((
+            [
+                (header::CONTENT_TYPE, HeaderValue::from_static("audio/ogg")),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+            Body::from_stream(body),
+        )
+            .into_response())
+    }
+}
+
+/// A running ffmpeg, owned by the response body: dropping it (the client
+/// went away) kills the process and frees its stream slot.
+struct Running {
+    stdout: ChildStdout,
+    #[expect(
+        dead_code,
+        reason = "held so dropping the body kills ffmpeg (kill_on_drop)"
+    )]
+    child: Child,
+    #[expect(dead_code, reason = "held for as long as the stream runs")]
+    permit: OwnedSemaphorePermit,
+}
+
+/// The body's next chunk from ffmpeg, ending the stream at end of file or
+/// after an error.
+async fn next_chunk(
+    state: Option<Running>,
+) -> Option<(Result<Bytes, std::io::Error>, Option<Running>)> {
+    let mut running = state?;
+    let mut buf = vec![0; CHUNK_BYTES];
+    match running.stdout.read(&mut buf).await {
+        Ok(0) => None,
+        Ok(n) => {
+            buf.truncate(n);
+            Some((Ok(Bytes::from(buf)), Some(running)))
+        }
+        Err(err) => Some((Err(err), None)),
+    }
+}
+
+/// Logs what ffmpeg writes to stderr (only errors, with `-loglevel
+/// error`), up to [`MAX_LOGGED_LINES`] lines. Returns those lines, for
+/// an error response if the stream never started.
+async fn log_stderr(stderr: ChildStderr) -> String {
+    let mut lines = BufReader::new(stderr).lines();
+    let mut kept = Vec::new();
+    let mut dropped = 0usize;
+    while let Ok(Some(line)) = lines.next_line().await {
+        if kept.len() < MAX_LOGGED_LINES {
+            tracing::warn!(ffmpeg = %line, "audio stream");
+            kept.push(line);
+        } else {
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        tracing::warn!(dropped, "audio stream: more ffmpeg errors not logged");
+    }
+    kept.join("; ")
+}
+
+/// ffmpeg's arguments for an audio stream of `input` from `start_ms`.
+pub(crate) fn ffmpeg_args(input: &Input, start_ms: u64, bitrate_kbps: u32) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-nostdin", "-hide_banner", "-loglevel", "error"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    if let Input::Http { headers, .. } = input {
+        args.push("-headers".into());
+        args.push(headers.into());
+    }
+    // Before `-i`: seek in the input, which is fast and starts the output's
+    // timestamps at zero.
+    args.push("-ss".into());
+    args.push(format!("{}.{:03}", start_ms / 1000, start_ms % 1000).into());
+    args.push("-i".into());
+    args.push(match input {
+        Input::File(path) => file_url(path),
+        Input::Http { url, .. } => url.into(),
+    });
+    for arg in [
+        // The first audio track only: no video, subtitles, or data.
+        "-map", "0:a:0", "-vn", "-sn", "-dn",
+        // Stereo Opus, whatever the source's channel layout.
+        "-ac", "2", "-c:a", "libopus",
+    ] {
+        args.push(arg.into());
+    }
+    args.push("-b:a".into());
+    args.push(format!("{bitrate_kbps}k").into());
+    for arg in ["-f", "ogg", "pipe:1"] {
+        args.push(arg.into());
+    }
+    args
 }
 
 impl App {
@@ -234,6 +432,28 @@ pub(crate) fn file_url(path: &Path) -> std::ffi::OsString {
     url
 }
 
+/// Whether `ffmpeg` runs and has the libopus encoder audio streams use.
+async fn runs_with_opus(ffmpeg: &Path) -> Result<(), String> {
+    runs(ffmpeg).await?;
+    let mut command = Command::new(ffmpeg);
+    command
+        .args(["-hide_banner", "-encoders"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = match tokio::time::timeout(DETECT_TIMEOUT, command.output()).await {
+        Err(_) => return Err(format!("`-encoders` took over {DETECT_TIMEOUT:?}")),
+        Ok(Err(err)) => return Err(err.to_string()),
+        Ok(Ok(output)) => output,
+    };
+    let encoders = String::from_utf8_lossy(&output.stdout);
+    if encoders.split_whitespace().any(|word| word == "libopus") {
+        Ok(())
+    } else {
+        Err("this ffmpeg has no libopus encoder".to_owned())
+    }
+}
+
 /// Whether `program -version` runs and succeeds (ffmpeg and ffprobe both
 /// take it). The error says why not.
 async fn runs(program: &Path) -> Result<(), String> {
@@ -278,6 +498,38 @@ mod tests {
         assert_eq!(parse_duration_ms(""), None);
         assert_eq!(parse_duration_ms("0.000000"), None);
         assert_eq!(parse_duration_ms("-3"), None);
+    }
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter().map(|a| a.into_string().unwrap()).collect()
+    }
+
+    #[test]
+    fn ffmpeg_args_for_a_file() {
+        let args = ffmpeg_args(&Input::File(PathBuf::from("/m/a b.mkv")), 61_005, 96);
+        assert_eq!(
+            strings(args).join(" "),
+            "-nostdin -hide_banner -loglevel error -ss 61.005 -i file:/m/a b.mkv \
+             -map 0:a:0 -vn -sn -dn -ac 2 -c:a libopus -b:a 96k -f ogg pipe:1"
+        );
+    }
+
+    #[test]
+    fn ffmpeg_args_for_jellyfin_send_headers_before_the_input() {
+        let input = Input::Http {
+            url: "http://jf/Videos/x/stream?static=true".to_owned(),
+            headers: "Authorization: MediaBrowser Token=\"k\"\r\n".to_owned(),
+        };
+        let args = strings(ffmpeg_args(&input, 0, 64));
+        let at = |s: &str| args.iter().position(|a| a == s).unwrap();
+        assert_eq!(
+            args[at("-headers") + 1],
+            "Authorization: MediaBrowser Token=\"k\"\r\n"
+        );
+        assert!(at("-headers") < at("-i"));
+        assert_eq!(args[at("-ss") + 1], "0.000");
+        assert_eq!(args[at("-i") + 1], "http://jf/Videos/x/stream?static=true");
+        assert_eq!(args[at("-b:a") + 1], "64k");
     }
 
     #[test]

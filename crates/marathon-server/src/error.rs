@@ -44,6 +44,10 @@ pub enum ApiError {
     /// not be reached.
     #[error("{0}")]
     Upstream(String),
+    /// The server cannot do this now, or without other setup (no ffmpeg
+    /// for audio streams, or too many running).
+    #[error("{0}")]
+    Unavailable(String),
     #[error("internal error")]
     Internal(#[from] Error),
 }
@@ -69,6 +73,7 @@ impl ApiError {
             ApiError::ChannelEmpty(_) | ApiError::NothingToPlay { .. } => ErrorCode::ChannelEmpty,
             ApiError::StaleItem { .. } => ErrorCode::StaleItem,
             ApiError::Upstream(_) => ErrorCode::Upstream,
+            ApiError::Unavailable(_) => ErrorCode::Unavailable,
             ApiError::Internal(_) => ErrorCode::Internal,
         }
     }
@@ -82,6 +87,7 @@ impl ApiError {
             | ApiError::NothingToPlay { .. }
             | ApiError::StaleItem { .. } => StatusCode::CONFLICT,
             ApiError::Upstream(_) => StatusCode::BAD_GATEWAY,
+            ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

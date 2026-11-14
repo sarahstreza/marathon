@@ -347,6 +347,10 @@ pub enum ErrorCode {
     /// A source the server depends on (a Jellyfin server) failed or could
     /// not be reached (status 502).
     Upstream,
+    /// The server can't do this right now, or at all with its current
+    /// setup (status 503): audio streams when it has no working ffmpeg, or
+    /// when too many are already running.
+    Unavailable,
     /// Something went wrong on the server.
     Internal,
 }
@@ -367,6 +371,12 @@ pub mod paths {
     /// `GET`: media bytes of an item.
     pub fn stream(item_id: &str) -> String {
         format!("{API_PREFIX}/stream/{item_id}")
+    }
+
+    /// `GET`: an item's audio only, as Ogg Opus (PLAN.md M12). Add
+    /// `?start_ms=` to start partway in.
+    pub fn audio(item_id: &str) -> String {
+        format!("{API_PREFIX}/audio/{item_id}")
     }
 
     /// `GET`: the `index`th sidecar subtitle of an item.

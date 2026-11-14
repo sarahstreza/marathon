@@ -10,6 +10,85 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/audio/{item_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "description": "The item's first audio track only, downmixed to stereo and transcoded to Opus in Ogg as it is sent (PLAN.md M12). There is no `Range` support and no length; seek by requesting again with a new `start_ms`. Only offered when `now` gives an `audio_url`.",
+        "operationId": "audio",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_ms",
+            "in": "query",
+            "description": "Where to start, in milliseconds (default 0)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The audio stream",
+            "content": {
+              "audio/ogg": {}
+            }
+          },
+          "400": {
+            "description": "Malformed query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item, or its file is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ffmpeg produced no audio (the item has none, or its source failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server has no audio streams, or too many are running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/channels": {
       "get": {
         "tags": [
@@ -1375,6 +1454,7 @@
           "channel_empty",
           "stale_item",
           "upstream",
+          "unavailable",
           "internal"
         ]
       },
