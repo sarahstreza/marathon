@@ -213,9 +213,11 @@ impl HttpApi {
 
     fn absolute_now(&self, mut now: Now) -> Now {
         now.stream_url = self.resolve(&now.stream_url);
+        now.audio_url = now.audio_url.take().map(|url| self.resolve(&url));
         self.absolute_item(&mut now.item);
         if let Some(next) = &mut now.next {
             next.stream_url = self.resolve(&next.stream_url);
+            next.audio_url = next.audio_url.take().map(|url| self.resolve(&url));
             self.absolute_item(&mut next.item);
         }
         now

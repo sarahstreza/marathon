@@ -38,12 +38,20 @@ class Settings(context: Context) {
         prefs.edit { remove(widgetKey(appWidgetId)) }
     }
 
+    /** Whether audio-only mode (PLAN.md M12) was last on. */
+    fun audioOnly(): Boolean = prefs.getBoolean(KEY_AUDIO_ONLY, false)
+
+    fun saveAudioOnly(on: Boolean) {
+        prefs.edit { putBoolean(KEY_AUDIO_ONLY, on) }
+    }
+
     /** This installation's client ID (PLAN.md §8), created on first use. */
     fun clientId(): String = ClientId.loadOrCreate(clientIdFile)
 
     private companion object {
         const val KEY_URL = "server_url"
         const val KEY_TOKEN = "server_token"
+        const val KEY_AUDIO_ONLY = "audio_only"
 
         fun widgetKey(appWidgetId: Int) = "widget_channel_$appWidgetId"
     }

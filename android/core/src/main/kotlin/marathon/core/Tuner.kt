@@ -467,7 +467,7 @@ class Tuner<P : Player>(
             reportWarnings(now)
             val startMs = config.resumeAt(now.positionMs)
             val failure = try {
-                player.load(LoadRequest(url = now.streamUrl, startMs = startMs, subtitles = subtitleTracks(now.item)))
+                player.load(loadRequest(now, startMs))
                 null
             } catch (e: PlayerError) {
                 e
@@ -534,14 +534,21 @@ class Tuner<P : Player>(
         val channelId = playing.now.channelId
         val fromItemId = playing.now.item.id
         val prefetch = playing.now.next?.let { next ->
-            playing.now.copy(item = next.item, positionMs = 0, streamUrl = next.streamUrl, next = null, warnings = null)
+            playing.now.copy(
+                item = next.item,
+                positionMs = 0,
+                streamUrl = next.streamUrl,
+                audioUrl = next.audioUrl,
+                next = null,
+                warnings = null,
+            )
         }
         emit(Event.ItemEnded(channelId, fromItemId))
         // It played, so the failure streak is over.
         failures = 0
         val preloaded = prefetch?.let { next ->
             try {
-                player.load(LoadRequest(url = next.streamUrl, startMs = 0, subtitles = subtitleTracks(next.item)))
+                player.load(loadRequest(next, 0))
                 next
             } catch (e: PlayerError) {
                 Log.warn("cannot preload the next item: $e")
@@ -673,6 +680,15 @@ class Tuner<P : Player>(
 
 private fun subtitleTracks(item: Item): List<SubtitleTrack> =
     item.subtitles.map { SubtitleTrack(url = it.url, title = it.label, language = it.language) }
+
+/** What to tell the player to play for [now], from [startMs]. */
+private fun loadRequest(now: Now, startMs: Long): LoadRequest = LoadRequest(
+    url = now.streamUrl,
+    startMs = startMs,
+    subtitles = subtitleTracks(now.item),
+    audioUrl = now.audioUrl,
+    durationMs = now.item.durationMs,
+)
 
 /** A one-line description of the current item, e.g. `Show · S03E14 · The Injury`. */
 /**

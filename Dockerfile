@@ -8,7 +8,8 @@
 # The binary is linked statically against musl (Alpine's Rust targets musl
 # and links statically by default). SQLite is bundled into it (sqlx's
 # `sqlite-bundled`). The runtime image is plain Alpine: the binary, CA
-# certificates (for https Jellyfin servers), and su-exec plus a small
+# certificates (for https Jellyfin servers), ffmpeg (for audio-only
+# streams, PLAN.md M12), and su-exec plus a small
 # entrypoint (docker/entrypoint.sh) that runs the server as PUID:PGID,
 # 1000:1000 unless overridden:
 #
@@ -37,7 +38,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && install -D target/release/marathond /out/marathond
 
 FROM docker.io/library/alpine:${ALPINE_VERSION}
-RUN apk add --no-cache ca-certificates su-exec \
+RUN apk add --no-cache ca-certificates ffmpeg su-exec \
     && install -d -o 1000 -g 1000 /data
 COPY --from=build /out/marathond /usr/local/bin/marathond
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh

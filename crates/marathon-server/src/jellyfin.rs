@@ -28,11 +28,16 @@
 //! range headers through in both directions, so seeking works as it does
 //! for local files.
 //!
+//! `GET /audio/{id}` (PLAN.md M12) has ffmpeg read the same URL itself
+//! ([`JellyfinClient::ffmpeg_input`]), so it can seek with range requests.
+//!
 //! # Credentials
 //!
 //! The API key goes only in the `Authorization` header (marked sensitive,
 //! so it is never printed), never in a URL. Errors name the source and the
-//! URL, which carries no secret.
+//! URL, which carries no secret. The one exception is audio streams:
+//! ffmpeg gets the header as a command-line argument, which other users on
+//! the server's machine can see while it runs.
 
 use std::time::Duration;
 
@@ -308,6 +313,17 @@ impl JellyfinClient {
             }
         }
         Ok(found)
+    }
+
+    /// What ffmpeg needs to read the Jellyfin item `jellyfin_id`'s original
+    /// file: its URL, and the HTTP headers to send (CRLF-terminated, as
+    /// ffmpeg's `-headers` takes them). The headers carry the API key.
+    pub(crate) fn ffmpeg_input(&self, jellyfin_id: &str) -> (String, String) {
+        let mut url = self.url(&["Videos", jellyfin_id, "stream"]);
+        url.query_pairs_mut().append_pair("static", "true");
+        // The value was built from a str in `new`, so it is valid UTF-8.
+        let auth = String::from_utf8_lossy(self.auth.as_bytes());
+        (url.into(), format!("Authorization: {auth}\r\n"))
     }
 
     /// Proxies a stream request for the Jellyfin item `jellyfin_id` (see

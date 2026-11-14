@@ -132,18 +132,27 @@ API is served under `/api/v1` (PLAN.md §8); its OpenAPI document is at
 `/api/v1/openapi.json`. The SQLite database lives in `data_dir`. Set
 `RUST_LOG=debug` for more logging.
 
+If ffmpeg (built with libopus) is on the server's `PATH`, it also serves
+audio-only streams for the Android client's audio-only mode: just an
+item's audio, as stereo Opus at about 96 kbit/s. The log says at startup
+whether they're on. The `[audio]` table in the example config tunes or
+turns them off. For a Jellyfin source, ffmpeg gets the Jellyfin API key
+on its command line, so other users on the server's machine can see it
+while a stream runs.
+
 For example, against the test library (see [Test media](#test-media)):
 
 ```sh
 curl -s localhost:7878/api/v1/channels | jq
 curl -s localhost:7878/api/v1/channels/<id>/now | jq
 mpv http://localhost:7878/api/v1/stream/<item-id>
+mpv http://localhost:7878/api/v1/audio/<item-id>   # audio only
 ```
 
 #### Running the server in a container
 
-The [`Dockerfile`](Dockerfile) builds a small image holding only
-`marathond`: a static (musl) binary on Alpine, running as an unprivileged
+The [`Dockerfile`](Dockerfile) builds a small image holding `marathond`
+and ffmpeg (for audio streams): a static (musl) binary on Alpine, running as an unprivileged
 user (uid/gid 1000 by default). It works with Docker or Podman:
 
 ```sh

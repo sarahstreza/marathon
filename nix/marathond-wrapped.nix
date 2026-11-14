@@ -29,6 +29,9 @@
   configFile ? null,
   # Arguments added before the caller's, e.g. [ "--bind" "0.0.0.0:7878" ].
   extraArgs ? [ ],
+  # ffmpeg for audio-only streams (PLAN.md M12), appended to PATH so an
+  # ffmpeg already there wins. null leaves PATH alone.
+  ffmpeg ? pkgs.ffmpeg-headless,
 }:
 
 assert lib.assertMsg (
@@ -57,6 +60,7 @@ let
 
   launcher = writeShellScript "marathond" ''
     set -euo pipefail
+    ${lib.optionalString (ffmpeg != null) ''export PATH="''${PATH:+$PATH:}${lib.getBin ffmpeg}/bin"''}
     ${lib.optionalString (config != null) config.setup}
     exec -a "$0" ${lib.getExe marathond-unwrapped} ${lib.escapeShellArgs args} "$@"
   '';

@@ -113,7 +113,10 @@ Get these right before anything else; every component depends on them.
   the client adds them with mpv's `sub-add` command. Embedded subtitles work
   without any of this.
 - Durations come from the client (mpv reports them) or from catalog providers
-  that know them (Jellyfin). The MVP does not run ffprobe on the server.
+  that know them (Jellyfin). The MVP does not run ffprobe on the server; from
+  M12 on, a server with audio streaming enabled probes a filesystem item's
+  duration once, when it first builds a `now` for it without one, because an
+  audio stream carries none.
 
 ---
 
@@ -356,13 +359,14 @@ via `http-header-fields`).
 |---|---|---|
 | GET | `/health`, `/version` | Liveness, API version |
 | GET | `/channels` | List channels with current item summary, in guide order. Hidden channels (M11) only with `?include_hidden=true` |
-| GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch |
+| GET | `/channels/{id}/now` | Current item, resume position, stream URL, subtitle URLs, and the **next** item's stream URL for prefetch. From M12, also `audio_url`s when audio streaming is enabled |
 | POST | `/channels/{id}/progress` | `{item_id, position_ms, duration_ms?, paused}` |
 | POST | `/channels/{id}/advance` | `{from_item_id, reason: "ended" \| "skipped"}` → new `now`. **Idempotent:** if `from_item_id` is not the channel's current item, return the current `now` without advancing |
 | POST | `/channels/{id}/previous` | `{from_item_id}` → new `now`. Step back via the rule's `previous`; idempotent like `advance` |
 | GET | `/channels/{id}/plan?items=&hours=` | M11: what the channel will play from its current item on, by stepping copies of its state (and its children's) exactly as playback would |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
+| GET | `/audio/{item_id}?start_ms=` | M12: the item's audio only, transcoded to Opus in Ogg as it is sent, starting `start_ms` in. No `Range`; seek by requesting a new `start_ms`. `503 unavailable` when the server has no working ffmpeg |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
 | GET | `/history?limit=` | Recent events, newest first |
 | POST | `/library/rescan` | Rescan all sources |
@@ -1024,6 +1028,52 @@ skips at most 5 empty children per request (the client's failure cap) and
 reports each skip in `Now.warnings`, which clients emit as `Error` events.
 A hidden channel may omit `number`; the API reports it as `0`.
 
+### M12 — Audio-only mode
+
+Background radio on Android: listen to a channel with the phone in a pocket
+and the screen off, using a fraction of the data video needs.
+
+The server gains an optional `[audio]` table (`ffmpeg`, `ffprobe`,
+`bitrate_kbps` default 96, `max_streams` default 4). At startup it checks
+that ffmpeg runs; if not, audio is disabled with a warning and the server
+starts anyway. `GET /audio/{item_id}?start_ms=N` runs ffmpeg on the item
+(the file, or the Jellyfin stream URL) from `N`, keeping only the first
+audio track, downmixed to stereo Opus in Ogg, and streams ffmpeg's output.
+The process is killed when the client disconnects; more than `max_streams`
+at once get `503`. `now` and its `next` gain `audio_url` (absent when audio
+is disabled), and filesystem items with no duration are probed with ffprobe
+once (§2), because the client cannot learn one from a pipe.
+
+The Android client gets an "Audio only" toggle. In audio mode the player
+loads `audio_url` with `vid=no`, offsets positions by the start it asked
+for, seeks by reloading, and reconnects once if a long pause dropped the
+stream. With audio-only on, leaving the app does not mean standby: a
+foreground `mediaPlayback` service keeps the session alive, with a
+MediaSession and notification whose buttons are channel down, play/pause,
+and channel up. Unplugging headphones pauses. The Tuner is unchanged apart
+from passing `audio_url` through.
+
+**Complete when:**
+- [auto] `GET /audio/{id}` returns `200 audio/ogg` with an Ogg Opus body for
+  a test-library item; `start_ms` gives a shorter stream; an unknown item is
+  `404`; disabled audio and exceeding `max_streams` are `503`.
+- [auto] Dropping an audio response kills its ffmpeg process.
+- [auto] With audio enabled, `now` for an item without a duration fills it
+  in by probing, and probes each item only once.
+- [auto] `now` and `next` carry `audio_url` exactly when audio is enabled;
+  OpenAPI documents the field and the Kotlin client is regenerated.
+- [auto] The Android player's offset and seek arithmetic is unit tested.
+- [manual] Turning audio-only on while watching continues the audio from the
+  same point, at roughly the configured bitrate.
+- [manual] With the phone locked, audio continues; the lock screen shows the
+  channel and title, and its buttons change channel and pause.
+- [manual] An item that ends in the background advances the channel.
+- [manual] Pausing for several minutes and resuming continues from the same
+  spot without skipping the item.
+- [manual] Unplugging headphones pauses.
+- [manual] Turning audio-only off brings the video back at the current
+  position.
+
 ### After the MVP (not now)
 
 Example adapters over the M6 API, each a separate small program: a phone
@@ -1034,13 +1084,13 @@ libinput `InputSource` and DRM/KMS `Surface` for the appliance (§13), optional
 loudness normalization across items (background TV should not jump in volume
 between episodes), a sleep timer, mDNS discovery, stats views, search, a
 channel editor UI, multiple profiles, content fingerprinting to survive file
-moves, server-side transcoding.
+moves, server-side video transcoding.
 
 ---
 
 ## 11. Non-goals for the MVP
 
-No transcoding. No multi-user or accounts (a single bearer token at most). No
+No video transcoding (M12's audio-only streams are the one exception). No multi-user or accounts (a single bearer token at most). No
 native SMB/NFS. No YouTube integration. No EPG with times. No phone remote UI
 (the action API exists; front-ends for it come later). No in-process plugin
 system. No Windows build (keep code portable, but do not test it yet).

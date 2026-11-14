@@ -252,6 +252,10 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
 - `INTERNET`, plus a network security config that allows cleartext HTTP.
   marathond on a LAN or a Tailscale address is plain HTTP, and PLAN.md leaves
   TLS to the user's VPN.
+- `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, and
+  `POST_NOTIFICATIONS`, for listening in the background (see "Audio only").
+  The notification permission is requested the first time audio only is
+  turned on; without it, playback works but shows no notification.
 
 ### Sleep timer
 
@@ -264,10 +268,51 @@ so the phone or TV can turn its screen off as usual. Pausing, not
 standby, so that unlocking the phone later doesn't resume by itself.
 The screen is kept on again once playback resumes.
 
-The timer lives in the activity (`SleepTimer`, unit tested), so only
-touch can set it. There is no `Action` for it, so neither a TV remote nor
+In the background (audio only), firing also stops listening there, like
+the notification's "Stop listening" (see "Audio only").
+
+The timer lives in `SessionHolder` (`SleepTimer`, unit tested), so it
+outlives the activity, but only touch can set it. There is no `Action` for it, so neither a TV remote nor
 the HTTP API can; PLAN.md lists a sleep timer after the MVP, and a
 cross-client one would belong in the Tuner.
+
+### Audio only
+
+PLAN.md M12. The control strip's **Audio only** button (it reads
+**Video** while on) stops the video and plays just the sound. It uses a
+fraction of the data, and keeps playing in the background with the
+screen off. The choice is saved (`Settings.audioOnly`).
+
+- **Stream.** `now` carries an `audio_url` when the server has ffmpeg:
+  the item's first audio track as stereo Opus, made on the fly
+  (`GET /audio/{id}?start_ms=`). The Tuner passes it, and the server's
+  duration, to the player in `LoadRequest`. `MpvPlayer` plays it with
+  `vid=no`. Positions are offset by where the stream started
+  (`AudioStream`, unit tested), and seeking or switching modes reopens the
+  stream at the current position. A stream cut off early (a long pause
+  can drop the connection) is reopened once where it stopped rather than
+  reported as ended or failed. Read-ahead is capped at two minutes, so
+  flipping channels doesn't download a burst each time. A server without
+  ffmpeg has no `audio_url`: turning audio only on is then refused with a
+  toast, and a saved choice plays the video stream with video off.
+- **Screen.** The Watch screen shows the channel and title on black.
+  Picture-in-picture is off, and the screen may turn off as usual.
+- **Background.** While audio only is on, `PlaybackService` runs. It is a
+  foreground `mediaPlayback` service with a MediaSession and a media
+  notification: channel down, play/pause, channel up, and Stop listening,
+  also on the lock screen, headset buttons, and Bluetooth controls, all
+  as Actions from the input `media-session`. Leaving the app therefore
+  isn't standby, and swiping Marathon out of recent apps keeps it playing.
+  The service starts while the app is visible, because Android 12+ won't
+  start one from the background. That is also why it runs in front too.
+- **Stopping.** Stop listening (or the sleep timer, when out of sight)
+  stops the service and sends `Standby`, so coming back resumes as after
+  any standby. Audio only stays on, and the service starts again the next
+  time the app is in front. Turning audio only off stops it too.
+- **Ownership.** The Session, audio focus, and the sleep timer live in
+  `SessionHolder` (a process-wide object), not the activity: the activity
+  creates and shows the session, and the service keeps the process alive.
+  The session is closed when neither needs it.
 
 ### Widgets
 
@@ -312,7 +357,8 @@ would anyway, then switches, because the action queues behind its start.
   Events from the Tuner's event sink go up the socket. This is the same protocol
   as desktop, so `POST /clients/{id}/actions` and `GET /events` work unchanged.
 - **Backgrounding is standby.** `onStop` sends `Action.Standby`, which pauses,
-  reports progress, and hides the overlay. `onStart` sends `Action.Wake`, which
+  reports progress, and hides the overlay. The exception is audio only,
+  which keeps playing in the background (see "Audio only"). `onStart` sends `Action.Wake`, which
   resumes only if standby was what paused it. This reuses Tuner behaviour that
   is already tested, instead of adding new states.
 - **Picture-in-picture.** Leaving the Watch screen for Home or recent apps
@@ -328,7 +374,9 @@ would anyway, then switches, because the action queues behind its start.
   the input `pip`, through a broadcast receiver that only Marathon can
   send to. Setup never goes into picture-in-picture.
 - **Audio focus.** If another app takes audio focus, Marathon pauses, staying
-  polite. It doesn't resume on its own when focus comes back.
+  polite. It doesn't resume on its own when focus comes back. Unplugging
+  headphones (`ACTION_AUDIO_BECOMING_NOISY`) pauses too. Focus is held
+  while the app is in front or listening in the background.
 
 ---
 
@@ -416,3 +464,41 @@ These need a person and a device. They are restated here with steps:
 11. **Android TV:** a remote's D-pad, OK, Back, and channel buttons drive every
     §9 action, including the guide. This needs TV hardware, or a working TV
     emulator (see the known issue above).
+
+## Manual checks (M12, audio only)
+
+Run `marathond` with ffmpeg on its PATH (its log says "audio streams are
+on"), against a test library made with `DURATION=600` so items are long
+enough to pause in.
+
+1. **Switching:** tap, then Audio only. On Android 13+ it asks for
+   notification permission the first time. The video stops, the card
+   shows the channel and title, and the sound carries on from the same
+   point. A media notification appears. On the phone's network-usage
+   screen (or the server's traffic), data drops to roughly 100 kbit/s.
+   Double-tap to seek: the position moves, and the sound picks up there
+   after a moment. Tap Video: the picture comes back at the current
+   position.
+2. **Background:** with audio only on, lock the phone. It keeps playing,
+   and the lock screen shows the channel and title. Its buttons change
+   channel and pause/resume. Repeat with Home, and with a Bluetooth
+   headset's buttons.
+3. **Auto-advance:** let an item end with the screen off. The next one
+   plays, and `examples/tail-events.sh` shows `item_ended` and
+   `now_playing`.
+4. **Long pause:** pause from the lock screen for over 5 minutes, then
+   play. It continues from the same spot, without skipping to the next
+   item. adb logcat may show "reconnecting".
+5. **Headphones:** unplug wired headphones (or switch off a Bluetooth
+   headset) while listening. Playback pauses.
+6. **Stop listening:** tap it in the notification. The notification goes,
+   playback pauses, and `tail-events.sh` shows `standby`. Open Marathon:
+   it resumes, still audio only, and the notification is back.
+7. **Swipe away:** with audio only playing, swipe Marathon out of recent
+   apps. It keeps playing. Stop listening then reports progress.
+8. **Sleep timer:** set it, lock the phone, and wait. At the end, playback
+   pauses and the notification goes away.
+9. **No ffmpeg:** against a server without ffmpeg, Audio only shows a toast
+   and stays off.
+10. **Hand-off:** listen on the phone, then tune the same channel on
+    desktop. It resumes at the phone's position.

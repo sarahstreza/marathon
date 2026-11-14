@@ -132,6 +132,9 @@ pub struct ChannelSummary {
 pub struct NextItem {
     pub item: Item,
     pub stream_url: String,
+    /// Where to stream just `item`'s audio from, as in [`Now::audio_url`].
+    #[serde(default)]
+    pub audio_url: Option<String>,
 }
 
 /// What a channel is playing: the response to `GET /channels/{id}/now`,
@@ -149,6 +152,12 @@ pub struct Now {
     pub position_ms: u64,
     /// Where to stream `item` from.
     pub stream_url: String,
+    /// Where to stream just `item`'s audio from (PLAN.md M12): Ogg Opus,
+    /// with no `Range` support; add `?start_ms=` to start partway in.
+    /// `None` when the server has no audio streams (no ffmpeg, or turned
+    /// off).
+    #[serde(default)]
+    pub audio_url: Option<String>,
     /// The item the channel will advance to, for prefetching. Computed
     /// without moving the channel. `None` only if it cannot be determined.
     pub next: Option<NextItem>,
@@ -347,6 +356,10 @@ pub enum ErrorCode {
     /// A source the server depends on (a Jellyfin server) failed or could
     /// not be reached (status 502).
     Upstream,
+    /// The server can't do this right now, or at all with its current
+    /// setup (status 503): audio streams when it has no working ffmpeg, or
+    /// when too many are already running.
+    Unavailable,
     /// Something went wrong on the server.
     Internal,
 }
@@ -367,6 +380,12 @@ pub mod paths {
     /// `GET`: media bytes of an item.
     pub fn stream(item_id: &str) -> String {
         format!("{API_PREFIX}/stream/{item_id}")
+    }
+
+    /// `GET`: an item's audio only, as Ogg Opus (PLAN.md M12). Add
+    /// `?start_ms=` to start partway in.
+    pub fn audio(item_id: &str) -> String {
+        format!("{API_PREFIX}/audio/{item_id}")
     }
 
     /// `GET`: the `index`th sidecar subtitle of an item.

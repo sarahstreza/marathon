@@ -22,6 +22,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/channels/{id}/plan"),
     ("get", "/api/v1/items/{id}"),
     ("get", "/api/v1/stream/{item_id}"),
+    ("get", "/api/v1/audio/{item_id}"),
     ("get", "/api/v1/subtitles/{item_id}/{n}"),
     ("get", "/api/v1/history"),
     ("post", "/api/v1/library/rescan"),

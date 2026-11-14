@@ -7,6 +7,9 @@
 //   mpv events ──┘                                  │
 //                                     Events ───────┼─► RemoteSource (GET /events)
 //                                     UiEvents ─────┴─► OverlayModel ─► Compose
+//
+// A Session belongs to SessionHolder, not to an activity, so that audio-only
+// playback can outlive the Watch screen (PlaybackService).
 package marathon.android
 
 import android.content.Context
@@ -23,6 +26,9 @@ import marathon.core.TunerConfig
 import marathon.core.TunerLoop
 import marathon.core.overlay.OverlayModel
 
+/** What's on, for the media notification and lock screen. */
+data class NowPlaying(val channelNumber: Int, val channelName: String, val title: String)
+
 class Session(context: Context, server: ServerSettings, clientId: String, onQuit: () -> Unit) {
     val api = HttpApi(server.url, server.token, clientId)
     val overlay = OverlayModel()
@@ -38,6 +44,14 @@ class Session(context: Context, server: ServerSettings, clientId: String, onQuit
 
     private lateinit var loop: TunerLoop<MpvPlayer>
 
+    private val nowPlayingState = MutableStateFlow<NowPlaying?>(null)
+
+    /** The channel and item playing, as the Tuner reports them (null before the first). */
+    val nowPlaying: StateFlow<NowPlaying?> = nowPlayingState
+
+    /** The channel's name from its last ChannelChanged, which NowPlaying lacks. */
+    @Volatile private var channelName = ""
+
     val player = MpvPlayer(context, api.mediaHeaders) { loop.playerEvent(it) }
 
     private val remote = RemoteSource(api.controlUrl(), api.http, { send(it, "remote") })
@@ -50,7 +64,13 @@ class Session(context: Context, server: ServerSettings, clientId: String, onQuit
             config = TunerConfig(clientId = clientId),
             events = { event ->
                 remote.publish(event)
-                if (event is Event.Error) toast(event.message)
+                when (event) {
+                    is Event.Error -> toast(event.message)
+                    is Event.ChannelChanged -> channelName = event.channelName
+                    is Event.NowPlaying ->
+                        nowPlayingState.value = NowPlaying(event.channelNumber, channelName, event.title)
+                    else -> {}
+                }
             },
             ui = { cue ->
                 overlay.cue(cue, SystemClock.nowMs())

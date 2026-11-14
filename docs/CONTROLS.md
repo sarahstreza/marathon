@@ -255,14 +255,21 @@ work as in the tables above.
 | Skip back or forward 10 seconds | Double-tap the left / right third of the screen |
 | Pause or resume | Double-tap the middle |
 | See what's on, and show the buttons | Tap once |
-| Guide, previous / next episode, pause, subtitles, change server | The buttons along the top |
+| Guide, previous / next episode, pause, subtitles, audio only, change server | The buttons along the top |
 | Close the guide or hide the banner | Back |
 
 **Back** closes whatever is open; with nothing open, it leaves the app.
 Leaving the app (Back, Home, switching apps, or the screen turning off)
 pauses the channel and saves its place. Coming back resumes it, unless
-you had paused it yourself. If another app starts playing sound,
-Marathon pauses.
+you had paused it yourself. If another app starts playing sound, or you
+unplug your headphones, Marathon pauses.
+
+**Audio only** (a button along the top) turns off the picture and plays
+just the sound, using much less data. It keeps playing when you leave the
+app or the screen turns off, like a radio. The notification and lock
+screen have channel down, pause, and channel up, and "Stop listening"
+pauses and puts it away. Tap **Video** to get the picture back. The
+server needs ffmpeg for this. Without it, the button says so.
 
 ## Coming later
 

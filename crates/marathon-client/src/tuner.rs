@@ -752,6 +752,7 @@ impl<A: Api, P: Player, C: Clock> Tuner<A, P, C> {
             item: next.item.clone(),
             position_ms: 0,
             stream_url: next.stream_url.clone(),
+            audio_url: next.audio_url.clone(),
             next: None,
             warnings: Vec::new(),
             ..playing.now.clone()

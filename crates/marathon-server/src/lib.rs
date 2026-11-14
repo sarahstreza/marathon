@@ -18,6 +18,7 @@
 //! ```
 
 mod app;
+mod audio;
 pub mod catalog;
 pub mod config;
 pub mod db;

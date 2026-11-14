@@ -33,6 +33,7 @@ use utoipa::OpenApi;
 
 use crate::PlanLimit;
 use crate::app::App;
+use crate::audio::Input;
 use crate::error::ApiError;
 use crate::playback::subtitles_of;
 use crate::sources::Source;
@@ -55,6 +56,7 @@ pub fn router(app: App) -> Router {
         .route("/channels/{id}/plan", get(plan))
         .route("/items/{id}", get(item))
         .route("/stream/{item_id}", get(stream))
+        .route("/audio/{item_id}", get(audio))
         .route("/subtitles/{item_id}/{n}", get(subtitle))
         .route("/history", get(history))
         .route("/library/rescan", post(rescan))
@@ -333,6 +335,63 @@ async fn stream(
         }
         Media::Jellyfin { client, id } => client.stream(&id, req.method(), req.headers()).await,
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct AudioParams {
+    #[serde(default)]
+    start_ms: u64,
+}
+
+#[utoipa::path(get, path = "/api/v1/audio/{item_id}", tag = "library",
+    description = "The item's first audio track only, downmixed to stereo and transcoded to \
+                   Opus in Ogg as it is sent (PLAN.md M12). There is no `Range` support and \
+                   no length; seek by requesting again with a new `start_ms`. Only offered \
+                   when `now` gives an `audio_url`.",
+    params(
+        ("item_id" = String, Path, description = "Item ID"),
+        ("start_ms" = Option<u64>, Query, description = "Where to start, in milliseconds \
+            (default 0)"),
+    ),
+    responses(
+        (status = 200, description = "The audio stream", content_type = "audio/ogg"),
+        (status = 400, description = "Malformed query", body = ErrorBody),
+        (status = 404, description = "No such item, or its file is missing", body = ErrorBody),
+        (status = 502, description = "ffmpeg produced no audio (the item has none, or its \
+            source failed)", body = ErrorBody),
+        (status = 503, description = "The server has no audio streams, or too many are \
+            running", body = ErrorBody),
+    ))]
+async fn audio(
+    State(app): State<App>,
+    Path(item_id): Path<String>,
+    query: Result<Query<AudioParams>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let Some(audio) = &app.inner.audio else {
+        return Err(ApiError::Unavailable(
+            "this server has no audio streams: it needs ffmpeg with libopus, and \
+             audio.enabled not set to false"
+                .to_owned(),
+        ));
+    };
+    let input = match media(&app, &item_id).await? {
+        Media::File(file) => {
+            // ffmpeg would fail too, but as a 502; a vanished file is a 404,
+            // as it is for `/stream`.
+            if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
+                return Err(ApiError::NotFound(format!(
+                    "item {item_id}'s file is missing"
+                )));
+            }
+            Input::File(file)
+        }
+        Media::Jellyfin { client, id } => {
+            let (url, headers) = client.ffmpeg_input(&id);
+            Input::Http { url, headers }
+        }
+    };
+    audio.stream(input, params.start_ms).await
 }
 
 #[utoipa::path(get, path = "/api/v1/subtitles/{item_id}/{n}", tag = "library",
@@ -630,7 +689,7 @@ async fn media(app: &App, item_id: &str) -> Result<Media, ApiError> {
 /// Joins a stored relative path onto a source root, refusing anything that
 /// could escape it. Stored paths come from scans and are always plain
 /// relative paths; this is defence in depth.
-fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
+pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     let rel = FsPath::new(rel);
     rel.components()
         .all(|c| matches!(c, Component::Normal(_)))
@@ -651,7 +710,7 @@ fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     ),
     paths(
         health, version, list_channels, now, progress, advance, previous, plan, item, stream,
-        subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
+        audio, subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, ChannelRef, Now, NextItem, PlannedItem, Item, Subtitle, ProgressReport,
