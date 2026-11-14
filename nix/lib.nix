@@ -54,7 +54,19 @@ rec {
         ) cfg.source
       );
 
-      attrs = {
+      # Only written when something is set, so marathond's defaults apply
+      # (and an empty [audio] table doesn't count as configuring it).
+      audio = clean {
+        inherit (cfg.audio)
+          enabled
+          ffmpeg
+          ffprobe
+          bitrate_kbps
+          max_streams
+          ;
+      };
+
+      attrs = lib.optionalAttrs (audio != { }) { inherit audio; } // {
         server = clean {
           inherit (server) bind data_dir;
           token = if server.tokenFile != null then placeholder "server-token" else server.token;

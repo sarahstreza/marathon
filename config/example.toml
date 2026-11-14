@@ -10,6 +10,17 @@ bind = "127.0.0.1:7878"
 data_dir = "~/.local/share/marathon"   # SQLite lives here
 # token = "change-me"                  # required if bind is not loopback
 
+# Audio-only streams (PLAN.md M12), for the Android client's audio-only
+# mode: the server runs ffmpeg to send just an item's audio, as stereo
+# Opus. On by default when ffmpeg (with libopus) is on PATH; without it,
+# the server runs as usual, with no audio streams. Every key is optional.
+# [audio]
+# enabled = true
+# ffmpeg = "ffmpeg"                    # a path, or a name on PATH
+# ffprobe = "ffprobe"                  # works out durations for streams
+# bitrate_kbps = 96                    # Opus bitrate, 6 to 510
+# max_streams = 4                      # at once; more are refused (503)
+
 # A filesystem source. Mounted SMB/NFS shares work as ordinary paths.
 [[source]]
 id = "nas"

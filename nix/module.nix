@@ -113,6 +113,16 @@ in
       description = "Open the port in `settings.server.bind` in the firewall.";
     };
 
+    ffmpeg = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = pkgs.ffmpeg-headless;
+      defaultText = lib.literalExpression "pkgs.ffmpeg-headless";
+      description = ''
+        ffmpeg (with libopus) for audio-only streams, put on the service's
+        PATH. null for none, which turns audio streams off.
+      '';
+    };
+
     supplementaryGroups = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -145,6 +155,7 @@ in
       # Restart when the config changes. (Secret files changing on their
       # own need a restart by hand.)
       restartTriggers = [ start ];
+      path = lib.optional (cfg.ffmpeg != null) cfg.ffmpeg;
 
       serviceConfig = {
         ExecStart = start;

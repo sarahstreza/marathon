@@ -203,6 +203,13 @@ marathond.override {
 }
 ```
 
+**Audio streams.** The `marathond` wrapper appends `ffmpeg-headless` to
+the server's `PATH`, so audio-only streams (PLAN.md M12) work without
+further setup. `marathond.override { ffmpeg = null; }` leaves it out. The
+NixOS module does the same through `services.marathond.ffmpeg`. The
+`audio.*` settings mirror the config's `[audio]` table; left unset,
+nothing is written and the server's defaults apply.
+
 The player's options, in
 [`nix/desktop-settings.nix`](../nix/desktop-settings.nix), mirror its
 command-line flags: `server`, `tokenFile`, `channel`, `windowed`,

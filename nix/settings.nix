@@ -164,6 +164,17 @@ in
       tokenFile = secretFile "A file holding the bearer token, read at launch.";
     };
 
+    # Left unset, marathond uses its defaults: audio streams on if ffmpeg
+    # is on its PATH (the wrapped package and the NixOS module put it
+    # there).
+    audio = {
+      enabled = nullOr types.bool "Offer audio-only streams (default true, if ffmpeg works).";
+      ffmpeg = nullOr types.str "The ffmpeg program: a path, or a name on PATH (default `ffmpeg`).";
+      ffprobe = nullOr types.str "The ffprobe program, for durations (default `ffprobe`).";
+      bitrate_kbps = nullOr (types.ints.between 6 510) "Opus bitrate in kbit/s (default 96).";
+      max_streams = nullOr types.ints.positive "Audio streams that may run at once (default 4).";
+    };
+
     source = mkOption {
       type = types.attrsOf (types.submodule source);
       default = { };
