@@ -6,9 +6,12 @@
 // Session itself lives in SessionHolder, so it can outlive this activity.
 package marathon.android
 
+import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -17,6 +20,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
@@ -27,6 +31,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.Lifecycle
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -54,6 +60,14 @@ class MainActivity : ComponentActivity() {
 
     /** The sleep timer paused playback, so the screen may turn off until it resumes. */
     private var asleep = false
+
+    /** Sleep-timer firings already handled (any before this activity existed don't count). */
+    private var sleptSeen = SessionHolder.slept.value
+
+    /** Asks for permission to show the background-listening notification (Android 13+). */
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) Log.info("no permission for notifications: background listening will have none")
+    }
 
     private val keys = KeyInput(
         send = { session?.send(it, "keys") },
@@ -120,7 +134,8 @@ class MainActivity : ComponentActivity() {
                     val current by SessionHolder.session.collectAsState()
                     val slept by SessionHolder.slept.collectAsState()
                     LaunchedEffect(slept) {
-                        if (slept > 0) {
+                        if (slept != sleptSeen) {
+                            sleptSeen = slept
                             asleep = true
                             keepScreenOn(false)
                         }
@@ -146,14 +161,17 @@ class MainActivity : ComponentActivity() {
                         }
                         val paused by s.player.paused.collectAsState()
                         val aspect by s.player.videoAspect.collectAsState()
-                        LaunchedEffect(paused, aspect) { pip.update(watching = true, paused, aspect) }
+                        val audioOnly by s.player.audioOnly.collectAsState()
+                        // No picture to shrink in audio only: leaving the app
+                        // keeps listening in the background instead.
+                        LaunchedEffect(paused, aspect, audioOnly) { pip.update(watching = !audioOnly, paused, aspect) }
                         // Playing again after the sleep timer: keep the screen on again.
                         LaunchedEffect(paused) {
-                            if (!paused && asleep) {
-                                asleep = false
-                                keepScreenOn(true)
-                            }
+                            if (!paused && asleep) asleep = false
                         }
+                        // It's a television, unless there's nothing to watch
+                        // (audio only) or the sleep timer stopped it.
+                        LaunchedEffect(paused, audioOnly) { keepScreenOn(!audioOnly && !asleep) }
                         val sleepChanged by SessionHolder.sleepChanged.collectAsState()
                         WatchScreen(
                             s,
@@ -164,6 +182,7 @@ class MainActivity : ComponentActivity() {
                                 SleepTimer.label(SessionHolder.sleepTimer.remainingMs())
                             },
                             onSleep = SessionHolder::cycleSleepTimer,
+                            onAudioOnly = ::toggleAudioOnly,
                             onSettings = {
                                 setupMessage = null
                                 showSetup = true
@@ -198,10 +217,38 @@ class MainActivity : ComponentActivity() {
         s.send(Action.GoToChannelId(channelId), "widget")
     }
 
+    /** The Audio only button. */
+    private fun toggleAudioOnly() {
+        val s = session ?: return
+        val on = !s.player.audioOnly.value
+        if (on &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (!SessionHolder.setAudioOnly(this, on)) {
+            s.toast("This server has no audio-only streams (it needs ffmpeg)")
+            return
+        }
+        settings.saveAudioOnly(on)
+        s.toast(if (on) "Audio only: keeps playing in the background" else "Video")
+    }
+
     private fun connect(server: ServerSettings) {
         val app = applicationContext
         try {
-            SessionHolder.replace(app, Session(app, server, clientId, onQuit = { SessionHolder.quit(app) }))
+            val session = Session(app, server, clientId, onQuit = { SessionHolder.quit(app) })
+            SessionHolder.replace(app, session)
+            if (settings.audioOnly()) {
+                // Started (connecting from Setup): listen in the background
+                // from now on. Otherwise onStart will.
+                if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                    SessionHolder.setAudioOnly(app, true)
+                } else {
+                    session.player.setAudioOnly(true)
+                }
+            }
         } catch (e: ApiError) {
             setupMessage = e.message
             showSetup = true

@@ -1,7 +1,8 @@
 // The Watch screen: the video, the overlay on top, and (on touch screens)
 // gestures and a control strip that send the same Actions as a remote. In
 // picture-in-picture it is just the video: the window is too small for
-// the overlay, and the system draws its own controls (Pip).
+// the overlay, and the system draws its own controls (Pip). In audio-only
+// mode (PLAN.md M12) there is no video; a card says what's playing.
 package marathon.android.ui
 
 import android.view.SurfaceHolder
@@ -14,6 +15,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -34,7 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import marathon.android.MpvPlayer
@@ -65,9 +70,12 @@ fun WatchScreen(
     /** The Sleep button's label (read while drawing, so it may read state). */
     sleepLabel: () -> String,
     onSleep: () -> Unit,
+    /** The Audio only button: turns the mode on or off. */
+    onAudioOnly: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val send = { action: Action -> session.send(action, "touch") }
+    val audioOnly by session.player.audioOnly.collectAsState()
     // Bumped by each tap; the strip shows for a while after the latest.
     var controlsShownAt by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
@@ -82,6 +90,7 @@ fun WatchScreen(
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         VideoSurface(session.player)
+        if (audioOnly && !inPip) AudioCard(session)
         if (!inPip) {
             Box(
                 Modifier
@@ -131,6 +140,11 @@ fun WatchScreen(
                             // Keep the strip up while stepping through the durations.
                             controlsShownAt += 1
                         },
+                        audioOnly = audioOnly,
+                        onAudioOnly = {
+                            onAudioOnly()
+                            controlsShownAt += 1
+                        },
                         onSettings = onSettings,
                         modifier = Modifier.align(Alignment.TopCenter),
                     )
@@ -140,8 +154,39 @@ fun WatchScreen(
     }
 }
 
+/** What's playing, on black, in place of the video in audio-only mode. */
 @Composable
-private fun ControlStrip(send: (Action) -> Unit, sleepLabel: String, onSleep: () -> Unit, onSettings: () -> Unit, modifier: Modifier) {
+private fun AudioCard(session: Session) {
+    val playing by session.nowPlaying.collectAsState()
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Audio only", color = Color(0xFFF2A93B), fontSize = 16.sp)
+        playing?.let {
+            Text(
+                "${it.channelNumber} ${it.channelName}".trim(),
+                color = Color(0xB3FFFFFF),
+                fontSize = 20.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            Text(it.title, color = Color.White, fontSize = 28.sp, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun ControlStrip(
+    send: (Action) -> Unit,
+    sleepLabel: String,
+    onSleep: () -> Unit,
+    audioOnly: Boolean,
+    onAudioOnly: () -> Unit,
+    onSettings: () -> Unit,
+    modifier: Modifier,
+) {
     Row(
         modifier
             .padding(16.dp)
@@ -157,6 +202,7 @@ private fun ControlStrip(send: (Action) -> Unit, sleepLabel: String, onSleep: ()
         button("⏭") { send(Action.NextItem) }
         button("Subtitles") { send(Action.ToggleSubtitles) }
         button(sleepLabel) { onSleep() }
+        button(if (audioOnly) "Video" else "Audio only") { onAudioOnly() }
         button("Server") { onSettings() }
     }
 }

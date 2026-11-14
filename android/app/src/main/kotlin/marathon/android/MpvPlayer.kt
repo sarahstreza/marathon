@@ -21,7 +21,9 @@
 //
 // Audio-only mode (PLAN.md M12, docs/ANDROID.md "Audio only"): with
 // setAudioOnly(true), loads play the server's audio stream for the item
-// (LoadRequest.audioUrl) with video off, instead of the video stream. A
+// (LoadRequest.audioUrl) with video off, instead of the video stream. An
+// item without one (a server without ffmpeg) plays its video stream with
+// video off: still audio only, just without saving data. A
 // stream starts where it is asked to, at timestamp zero, so positions are
 // offset by where it started (AudioStream), its duration comes from the
 // server, and seeking or switching modes reopens the stream at the
@@ -182,7 +184,8 @@ class MpvPlayer(
         if (on && current != null && current.audioUrl == null) return false
         audioOnlyWanted = on
         audioOnlyState.value = on
-        if (current != null && (on && current.audioUrl != null) != playingAudio) {
+        if (current == null) return true
+        if (on != synchronized(lock) { playingAudio }) {
             val at = positionMs() ?: current.startMs
             Log.info("audio only ${if (on) "on" else "off"} at ${at}ms")
             try {
@@ -191,10 +194,12 @@ class MpvPlayer(
                 // mpv refused the command itself; the next load tries again.
                 Log.warn("cannot switch to ${if (on) "audio" else "video"}: $e")
             }
+        } else if (!on) {
+            // The video stream with video off (it had no audio stream): just show it again.
+            mpv.setPropertyString("vid", "auto")
         }
         true
     }
-
 
     // --- Player -------------------------------------------------------------
 
@@ -225,7 +230,7 @@ class MpvPlayer(
         }
         timePos = null
         duration = null
-        mpv.setPropertyString("vid", if (audioUrl != null) "no" else "auto")
+        mpv.setPropertyString("vid", if (audioOnlyWanted) "no" else "auto")
         // mpv reads network streams far ahead by default. For video that
         // smooths playback; for audio it would fetch (and have the server
         // transcode) up to an hour on every channel flip.
