@@ -67,6 +67,8 @@ private fun item(id: String, durationMs: Long?) = Item(
 
 private fun url(id: String) = "http://server/api/v1/stream/$id"
 
+private fun audioUrl(id: String) = "http://server/api/v1/audio/$id"
+
 private class FakeChannel(val id: String, val number: Int, var items: MutableList<Item>) {
     var current = 0
     var positionMs = 0L
@@ -80,6 +82,9 @@ private class FakeChannel(val id: String, val number: Int, var items: MutableLis
     /** What `now` and `advance` report the server skipped. */
     var warnings: List<String> = emptyList()
 
+    /** Whether the server offers audio streams (`audio_url`, PLAN.md M12). */
+    var audio = false
+
     fun now(): Now {
         val item = items[current]
         val next = items[(current + 1) % items.size]
@@ -90,7 +95,8 @@ private class FakeChannel(val id: String, val number: Int, var items: MutableLis
             item = item,
             positionMs = positionMs,
             streamUrl = url(item.id),
-            next = NextItem(item = next, streamUrl = url(next.id)),
+            audioUrl = audioUrl(item.id).takeIf { audio },
+            next = NextItem(item = next, streamUrl = url(next.id), audioUrl = audioUrl(next.id).takeIf { audio }),
             resolutionPath = listOf(ChannelRef(id = id, name = "Channel $number")) + via,
             warnings = warnings,
         )
@@ -276,7 +282,9 @@ private class Harness(channels: Int, items: Int) {
 private fun progressReports(entries: List<Entry>): List<Pair<String, ProgressReport>> =
     entries.filterIsInstance<Entry.Progress>().map { it.channel to it.report }
 
-private fun load(id: String, startMs: Long): Entry = Entry.Load(LoadRequest(url = url(id), startMs = startMs, subtitles = emptyList()))
+/** A load of item [id] from [startMs]; the harness's items all last 20 minutes. */
+private fun load(id: String, startMs: Long): Entry =
+    Entry.Load(LoadRequest(url = url(id), startMs = startMs, subtitles = emptyList(), durationMs = 20 * MIN))
 
 private fun errors(events: List<Event>): List<String> = events.filterIsInstance<Event.Error>().map { it.message }
 
@@ -286,6 +294,22 @@ private fun advances(entries: List<Entry>, reason: AdvanceReason): Int =
 private fun banner(number: Int, title: String) = Banner(channelNumber = number, channelName = "Channel $number", title = title, show = null)
 
 class TunerTest {
+    @Test
+    fun audio_urls_and_durations_reach_the_player() {
+        val h = Harness(1, 3)
+        h.server.channel("c1").audio = true
+        h.tuner.start(1)
+        val first = h.take().filterIsInstance<Entry.Load>().last().request
+        assertEquals(audioUrl("c1-0"), first.audioUrl)
+        assertEquals(20 * MIN, first.durationMs)
+
+        // The prefetched next item, loaded before the server is asked.
+        h.tuner.handlePlayerEvent(PlayerEvent.Ended)
+        val next = h.take().filterIsInstance<Entry.Load>().first().request
+        assertEquals(url("c1-1"), next.url)
+        assertEquals(audioUrl("c1-1"), next.audioUrl)
+    }
+
     @Test
     fun tune_plays_at_saved_position_minus_rewind() {
         val h = Harness(2, 3)

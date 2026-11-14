@@ -173,8 +173,11 @@ class HttpApi(baseUrl: String, token: String?, clientId: String) : Api {
 
     private fun absoluteNow(now: Now): Now = now.copy(
         streamUrl = resolve(now.streamUrl),
+        audioUrl = now.audioUrl?.let(::resolve),
         item = absoluteItem(now.item),
-        next = now.next?.let { it.copy(streamUrl = resolve(it.streamUrl), item = absoluteItem(it.item)) },
+        next = now.next?.let {
+            it.copy(streamUrl = resolve(it.streamUrl), audioUrl = it.audioUrl?.let(::resolve), item = absoluteItem(it.item))
+        },
     )
 
     /** Runs a generated-client call, mapping its exceptions onto [ApiError]. */

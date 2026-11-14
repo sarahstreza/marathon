@@ -20,6 +20,17 @@ data class LoadRequest(
     val startMs: Long,
     /** Sidecar subtitles to add once the video has loaded. */
     val subtitles: List<SubtitleTrack>,
+    /**
+     * Where to stream just the item's audio from, if the server offers it
+     * (`Now.audio_url`, PLAN.md M12). A player in audio-only mode plays
+     * this instead of [url]; see [AudioStream].
+     */
+    val audioUrl: String? = null,
+    /**
+     * The item's duration as the server knows it. An audio stream carries
+     * none, so an audio-only player reports this one.
+     */
+    val durationMs: Long? = null,
 )
 
 /** A player failure that is not about one particular file. */
