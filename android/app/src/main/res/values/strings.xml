@@ -8,6 +8,11 @@
     <string name="pip_channel_up">Channel up</string>
     <string name="pip_channel_down">Channel down</string>
 
+    <!-- Background listening (PlaybackService) -->
+    <string name="playback_channel">Playback</string>
+    <string name="playback_channel_description">What\'s playing while Marathon is in the background, with its controls.</string>
+    <string name="playback_close">Stop listening</string>
+
     <!-- Widgets -->
     <string name="widget_list_label">Marathon channels</string>
     <string name="widget_list_description">Every channel and what it\'s on. Tap one to watch it.</string>

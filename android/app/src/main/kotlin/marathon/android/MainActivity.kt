@@ -1,15 +1,14 @@
 // The one activity: Setup until a server is known, then Watch. Remote keys
 // become Actions here (KeyInput); Back goes through the back dispatcher;
 // going to the background is standby (docs/ANDROID.md "Control channel and
-// lifecycle"), unless the video shrinks into picture-in-picture (Pip).
+// lifecycle"), unless the video shrinks into picture-in-picture (Pip) or
+// audio only is listening on in the background (PlaybackService). The
+// Session itself lives in SessionHolder, so it can outlive this activity.
 package marathon.android
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -25,7 +24,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
@@ -46,7 +44,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var clientId: String
     private val handler = Handler(Looper.getMainLooper())
 
-    private var session by mutableStateOf<Session?>(null)
+    private val session: Session? get() = SessionHolder.session.value
     private var setupMessage by mutableStateOf<String?>(null)
     private var showSetup by mutableStateOf(false)
     private var pendingDigits by mutableStateOf("")
@@ -54,30 +52,8 @@ class MainActivity : ComponentActivity() {
 
     private val pip by lazy { Pip(this) { session?.send(it, "pip") } }
 
-    /** Bumped when the sleep timer is set or fires, so its button's label redraws. */
-    private var sleepChanged by mutableIntStateOf(0)
-
     /** The sleep timer paused playback, so the screen may turn off until it resumes. */
     private var asleep = false
-
-    private val sleepTimer = SleepTimer(
-        schedule = { delayMs, block ->
-            val runnable = Runnable(block)
-            handler.postDelayed(runnable, delayMs)
-            ({ handler.removeCallbacks(runnable) })
-        },
-        nowMs = SystemClock::nowMs,
-        onWarn = { session?.toast("Sleep timer: pausing in a minute") },
-        onSleep = {
-            sleepChanged += 1
-            session?.let {
-                it.send(Action.Pause, "sleep-timer")
-                it.toast("Sleep timer: paused")
-            }
-            asleep = true
-            keepScreenOn(false)
-        },
-    )
 
     private val keys = KeyInput(
         send = { session?.send(it, "keys") },
@@ -92,24 +68,6 @@ class MainActivity : ComponentActivity() {
         nowMs = SystemClock::nowMs,
     )
 
-    private val audioFocus by lazy {
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                    .build(),
-            )
-            .setOnAudioFocusChangeListener { change ->
-                // Polite: another app wants the speakers, so pause. Don't
-                // resume by ourselves when it gives them back.
-                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                    session?.send(Action.Pause, "audio-focus")
-                }
-            }
-            .build()
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.sink = { level, message ->
@@ -122,6 +80,9 @@ class MainActivity : ComponentActivity() {
         }
         settings = Settings(this)
         clientId = settings.clientId()
+        SessionHolder.attach(this)
+        SessionHolder.activityCreated()
+        SessionHolder.onQuit = { finish() }
         goFullscreen()
         keepScreenOn(true)
         pip.register()
@@ -149,12 +110,22 @@ class MainActivity : ComponentActivity() {
             },
         )
 
-        settings.server()?.let(::connect) ?: run { showSetup = true }
+        // The session may have outlived an earlier activity, playing in the
+        // background; then this one just shows it.
+        if (session == null) settings.server()?.let(::connect) ?: run { showSetup = true }
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFF2A93B))) {
                 Surface(color = Color.Black) {
-                    val s = session
+                    val current by SessionHolder.session.collectAsState()
+                    val slept by SessionHolder.slept.collectAsState()
+                    LaunchedEffect(slept) {
+                        if (slept > 0) {
+                            asleep = true
+                            keepScreenOn(false)
+                        }
+                    }
+                    val s = current
                     if (showSetup || s == null) {
                         SetupScreen(settings.server(), setupMessage, clientId) { server ->
                             settings.save(server)
@@ -183,15 +154,16 @@ class MainActivity : ComponentActivity() {
                                 keepScreenOn(true)
                             }
                         }
+                        val sleepChanged by SessionHolder.sleepChanged.collectAsState()
                         WatchScreen(
                             s,
                             pendingDigits,
                             inPip,
                             sleepLabel = {
                                 sleepChanged // read, so the label redraws when it changes
-                                SleepTimer.label(sleepTimer.remainingMs())
+                                SleepTimer.label(SessionHolder.sleepTimer.remainingMs())
                             },
-                            onSleep = ::cycleSleepTimer,
+                            onSleep = SessionHolder::cycleSleepTimer,
                             onSettings = {
                                 setupMessage = null
                                 showSetup = true
@@ -226,17 +198,10 @@ class MainActivity : ComponentActivity() {
         s.send(Action.GoToChannelId(channelId), "widget")
     }
 
-    /** The Sleep button: steps the timer to its next duration, or off. */
-    private fun cycleSleepTimer() {
-        val minutes = sleepTimer.cycle()
-        sleepChanged += 1
-        session?.toast(if (minutes == null) "Sleep timer off" else "Sleep timer: $minutes min")
-    }
-
     private fun connect(server: ServerSettings) {
-        session?.close()
-        session = try {
-            Session(this, server, clientId, onQuit = { runOnUiThread { finish() } }).also { it.start() }
+        val app = applicationContext
+        try {
+            SessionHolder.replace(app, Session(app, server, clientId, onQuit = { SessionHolder.quit(app) }))
         } catch (e: ApiError) {
             setupMessage = e.message
             showSetup = true
@@ -258,25 +223,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        getSystemService(AudioManager::class.java).requestAudioFocus(audioFocus)
+        SessionHolder.activityStarted(this)
         // Back in front: resume, if going to the background was what paused it.
         session?.send(Action.Wake, "lifecycle")
     }
 
     override fun onStop() {
-        // Going to the background: pause and report progress (PLAN.md M10).
-        session?.send(Action.Standby, "lifecycle")
-        getSystemService(AudioManager::class.java).abandonAudioFocusRequest(audioFocus)
+        // Going to the background: pause and report progress (PLAN.md M10),
+        // unless listening on in the background (audio only).
+        if (SessionHolder.activityStopped(this)) session?.send(Action.Standby, "lifecycle")
         // Back on the home screen: show what the channels are on now.
         Widgets.refreshAll(this)
         super.onStop()
     }
 
     override fun onDestroy() {
-        sleepTimer.cancel()
         pip.unregister()
-        session?.close()
-        session = null
+        SessionHolder.activityDestroyed()
         super.onDestroy()
     }
 
