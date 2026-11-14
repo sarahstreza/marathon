@@ -19,9 +19,26 @@
 // END_FILEs instead would break when mpv replaces a queued file before
 // starting it, as rapid channel flipping does.)
 //
+// Audio-only mode (PLAN.md M12, docs/ANDROID.md "Audio only"): with
+// setAudioOnly(true), loads play the server's audio stream for the item
+// (LoadRequest.audioUrl) with video off, instead of the video stream. A
+// stream starts where it is asked to, at timestamp zero, so positions are
+// offset by where it started (AudioStream), its duration comes from the
+// server, and seeking or switching modes reopens the stream at the
+// current position. Such reopens replace the file like any load (so the
+// Tuner just sees another Started), and keep the pause state.
+//
+// A long pause can let the stream's connection drop. Then mpv either
+// goes idle (an error) or reaches the end of the file early. Rather than
+// reporting a failure or an end, which would skip the rest of the item,
+// the player reopens the stream once where it stopped. It does this again
+// only after playing on a while, so a stream that keeps dying still
+// reaches the Tuner as Failed.
+//
 // All mpv calls are thread-safe. load and friends run on the tuner
-// thread; mpv's callbacks arrive on its event thread and only forward
-// PlayerEvents to the tuner's queue.
+// thread, setAudioOnly on the main thread; `opening` serializes them.
+// mpv's callbacks arrive on its event thread and only forward
+// PlayerEvents to the tuner's queue, or hand a reconnect to `reopener`.
 package marathon.android
 
 import android.content.Context
@@ -29,6 +46,7 @@ import android.view.Surface
 import dev.jdtech.mpv.MPVLib
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import marathon.core.AudioStream
 import marathon.core.Log
 import marathon.core.LoadRequest
 import marathon.core.Player
@@ -36,6 +54,7 @@ import marathon.core.PlayerError
 import marathon.core.PlayerEvent
 import marathon.core.SubtitleTrack
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class MpvPlayer(
     context: Context,
@@ -76,6 +95,32 @@ class MpvPlayer(
     /** Subtitles to add once the latest load has opened. */
     private var pendingSubtitles: List<SubtitleTrack> = emptyList()
 
+    /** The Tuner's latest load, for reopening it (seeks, mode switches, reconnects). */
+    private var request: LoadRequest? = null
+
+    /** Whether the latest load is an audio stream, and where in the item that stream starts. */
+    private var playingAudio = false
+    private var offsetMs = 0L
+
+    /** Item position at the latest reconnect, while the reconnect hasn't played on [RECONNECT_AGAIN_MS]. */
+    private var reconnectedAtMs: Long? = null
+
+    /** Serializes loads and reopens from different threads. Never taken by mpv's callbacks. */
+    private val opening = Any()
+
+    /** Runs reconnects off mpv's event thread. */
+    private val reopener = Executors.newSingleThreadExecutor { Thread(it, "mpv-reopen").apply { isDaemon = true } }
+
+    @Volatile private var audioOnlyWanted = false
+
+    /** mpv's own `cache-secs`, restored for video. */
+    private val defaultCacheSecs: String
+
+    private val audioOnlyState = MutableStateFlow(false)
+
+    /** Whether audio-only mode is on, as it changes (whether or not the current item has an audio stream). */
+    val audioOnly: StateFlow<Boolean> = audioOnlyState
+
     init {
         for ((name, value) in OPTIONS) mpv.setOptionString(name, value)
         mpv.init()
@@ -83,6 +128,7 @@ class MpvPlayer(
             // `append` adds one entry; setting the whole list would split values on commas.
             mpv.command(arrayOf("change-list", "http-header-fields", "append", "$name: $value"))
         }
+        defaultCacheSecs = mpv.getPropertyString("cache-secs") ?: "3600"
         mpv.addObserver(this)
         mpv.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
@@ -119,39 +165,97 @@ class MpvPlayer(
     fun destroy() {
         if (destroyed) return
         destroyed = true
+        reopener.shutdownNow()
         mpv.removeObserver(this)
         mpv.destroy()
     }
 
+    // --- Audio-only mode (any thread) -------------------------------------
+
+    /**
+     * Turns audio-only mode on or off. What is playing switches at the
+     * current position. Returns false, changing nothing, if [on] and the
+     * current item has no audio stream (the server offers none).
+     */
+    fun setAudioOnly(on: Boolean): Boolean = synchronized(opening) {
+        val current = synchronized(lock) { request.takeIf { latestUrl != null } }
+        if (on && current != null && current.audioUrl == null) return false
+        audioOnlyWanted = on
+        audioOnlyState.value = on
+        if (current != null && (on && current.audioUrl != null) != playingAudio) {
+            val at = positionMs() ?: current.startMs
+            Log.info("audio only ${if (on) "on" else "off"} at ${at}ms")
+            try {
+                open(current, at, unpause = false)
+            } catch (e: PlayerError) {
+                // mpv refused the command itself; the next load tries again.
+                Log.warn("cannot switch to ${if (on) "audio" else "video"}: $e")
+            }
+        }
+        true
+    }
+
+
     // --- Player -------------------------------------------------------------
 
     override fun load(request: LoadRequest) {
+        synchronized(opening) {
+            synchronized(lock) { reconnectedAtMs = null }
+            open(request, request.startMs, unpause = true)
+        }
+    }
+
+    /**
+     * Plays [request] from [startMs]: its audio stream in audio-only mode
+     * (when it has one), else its video. [unpause] for the Tuner's loads;
+     * reopens keep the pause state. Call with `opening` held.
+     */
+    private fun open(request: LoadRequest, startMs: Long, unpause: Boolean) {
+        val audioUrl = request.audioUrl?.takeIf { audioOnlyWanted }
+        val url = audioUrl?.let { AudioStream.url(it, startMs) } ?: request.url
         synchronized(lock) {
-            latestUrl = request.url
+            this.request = request
+            playingAudio = audioUrl != null
+            offsetMs = if (audioUrl != null) startMs else 0
+            latestUrl = url
             startedSinceLoad = false
             loaded = false
-            pendingSubtitles = request.subtitles
+            // Sidecar subtitles only go with video.
+            pendingSubtitles = if (audioUrl != null) emptyList() else request.subtitles
         }
         timePos = null
         duration = null
+        mpv.setPropertyString("vid", if (audioUrl != null) "no" else "auto")
+        // mpv reads network streams far ahead by default. For video that
+        // smooths playback; for audio it would fetch (and have the server
+        // transcode) up to an hour on every channel flip.
+        mpv.setPropertyString("cache-secs", if (audioUrl != null) AUDIO_CACHE_SECS else defaultCacheSecs)
         // `start` applies to the next file loaded; it is set before every
-        // load, so it never leaks between items.
-        mpv.setPropertyString("start", String.format(Locale.ROOT, "%.3f", request.startMs / 1000.0))
-        mpv.setPropertyBoolean("pause", false)
-        pausedState.value = false
+        // load, so it never leaks between items. An audio stream already
+        // starts there.
+        val start = if (audioUrl != null) 0L else startMs
+        mpv.setPropertyString("start", String.format(Locale.ROOT, "%.3f", start / 1000.0))
+        if (unpause) {
+            mpv.setPropertyBoolean("pause", false)
+            pausedState.value = false
+        }
         try {
-            mpv.command(arrayOf("loadfile", request.url, "replace"))
+            mpv.command(arrayOf("loadfile", url, "replace"))
         } catch (e: RuntimeException) {
             throw PlayerError(e.message ?: e.toString())
         }
     }
 
     override fun stop() {
-        synchronized(lock) {
-            latestUrl = null
-            loaded = false
+        synchronized(opening) {
+            synchronized(lock) {
+                latestUrl = null
+                loaded = false
+                request = null
+                playingAudio = false
+            }
+            mpv.command(arrayOf("stop"))
         }
-        mpv.command(arrayOf("stop"))
     }
 
     override fun setPaused(paused: Boolean) {
@@ -162,14 +266,36 @@ class MpvPlayer(
     override fun isPaused(): Boolean = pausedState.value
 
     override fun seekRelative(seconds: Int) {
-        mpv.command(arrayOf("seek", seconds.toString(), "relative"))
+        synchronized(opening) {
+            val current = synchronized(lock) { request.takeIf { playingAudio && latestUrl != null } }
+            if (current == null) {
+                mpv.command(arrayOf("seek", seconds.toString(), "relative"))
+                return
+            }
+            // An audio stream can't seek: reopen it at the new position.
+            val target = AudioStream.seekTarget(positionMs() ?: offsetMs, seconds, current.durationMs)
+            try {
+                open(current, target, unpause = false)
+            } catch (e: PlayerError) {
+                Log.warn("cannot seek the audio stream: $e")
+            }
+        }
     }
 
-    override fun positionMs(): Long? = timePos?.takeIf { it.isFinite() && it >= 0 }?.let { Math.round(it * 1000) }
+    override fun positionMs(): Long? {
+        val (audio, offset) = synchronized(lock) { playingAudio to offsetMs }
+        if (audio) return AudioStream.positionMs(offset, timePos)
+        return timePos?.takeIf { it.isFinite() && it >= 0 }?.let { Math.round(it * 1000) }
+    }
 
-    override fun durationMs(): Long? = duration?.takeIf { it.isFinite() && it > 0 }?.let { Math.round(it * 1000) }
+    override fun durationMs(): Long? {
+        // An audio stream has no duration of its own; the server's stands in.
+        synchronized(lock) { if (playingAudio) return request?.durationMs }
+        return duration?.takeIf { it.isFinite() && it > 0 }?.let { Math.round(it * 1000) }
+    }
 
     override fun toggleSubtitles() {
+        if (synchronized(lock) { playingAudio }) return
         mpv.command(arrayOf("cycle", "sub"))
         Log.info("subtitles: track ${mpv.getPropertyString("sid")}")
     }
@@ -218,6 +344,7 @@ class MpvPlayer(
         when (property) {
             "pause" -> pausedState.value = value
             "eof-reached" -> if (value) {
+                if (streamDropped()) return
                 val ended = synchronized(lock) {
                     loaded.also {
                         if (it) {
@@ -229,6 +356,7 @@ class MpvPlayer(
                 if (ended) onEvent(PlayerEvent.Ended)
             }
             "idle-active" -> if (value) {
+                if (synchronized(lock) { loaded } && reconnect("the audio stream failed")) return
                 val failure = synchronized(lock) {
                     when {
                         latestUrl == null || !startedSinceLoad -> null
@@ -248,6 +376,49 @@ class MpvPlayer(
 
     override fun eventProperty(property: String, value: String) {}
 
+    /**
+     * At the end of an audio stream: whether it ended early, because its
+     * connection dropped, and is being reopened where it stopped. A stream
+     * that ends within [EARLY_END_MS] of the item's known duration, or of
+     * an unknown one, really ended.
+     */
+    private fun streamDropped(): Boolean {
+        val (audio, duration) = synchronized(lock) { playingAudio to request?.durationMs }
+        if (!audio || duration == null) return false
+        val at = positionMs() ?: return false
+        if (duration - at <= EARLY_END_MS) return false
+        return reconnect("the audio stream ended ${duration - at}ms early")
+    }
+
+    /**
+     * Reopens a playing audio stream where it stopped, unless one
+     * reconnect already happened without playing on [RECONNECT_AGAIN_MS]
+     * since. Returns whether it did (and the failure is handled).
+     */
+    private fun reconnect(why: String): Boolean {
+        val at = positionMs() ?: return false
+        val current = synchronized(lock) {
+            val again = reconnectedAtMs
+            if (!playingAudio || (again != null && at - again < RECONNECT_AGAIN_MS)) return false
+            reconnectedAtMs = at
+            loaded = false
+            request
+        } ?: return false
+        Log.warn("$why at ${at}ms; reconnecting")
+        reopener.execute {
+            synchronized(opening) {
+                // Only if nothing else was loaded meanwhile.
+                if (synchronized(lock) { request } !== current || destroyed) return@execute
+                try {
+                    open(current, at, unpause = false)
+                } catch (e: PlayerError) {
+                    onEvent(PlayerEvent.Failed("cannot reopen the audio stream: ${e.message}"))
+                }
+            }
+        }
+        return true
+    }
+
     private fun addSubtitles(subtitles: List<SubtitleTrack>) {
         subtitles.forEachIndexed { i, sub ->
             // Select the first sidecar track: having one is a sign the viewer wants it.
@@ -262,6 +433,15 @@ class MpvPlayer(
 
     private companion object {
         const val VIDEO_OUTPUT = "gpu"
+
+        /** An audio stream ending further than this from the item's end was cut off. */
+        const val EARLY_END_MS = 10_000L
+
+        /** How far a reconnected stream must play before another reconnect is allowed. */
+        const val RECONNECT_AGAIN_MS = 10_000L
+
+        /** How far ahead to read an audio stream: about 1.4 MB at 96 kbit/s. */
+        const val AUDIO_CACHE_SECS = "120"
 
         /** mpv options, set before it initializes. Mirrors the desktop's mpv_options. */
         val OPTIONS = listOf(
