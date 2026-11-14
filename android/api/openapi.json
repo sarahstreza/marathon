@@ -1847,6 +1847,13 @@
           "stream_url"
         ],
         "properties": {
+          "audio_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to stream just `item`'s audio from, as in [`Now::audio_url`]."
+          },
           "item": {
             "$ref": "#/components/schemas/Item"
           },
@@ -1867,6 +1874,13 @@
           "stream_url"
         ],
         "properties": {
+          "audio_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to stream just `item`'s audio from (PLAN.md M12): Ogg Opus,\nwith no `Range` support; add `?start_ms=` to start partway in.\n`None` when the server has no audio streams (no ffmpeg, or turned\noff)."
+          },
           "channel_id": {
             "type": "string"
           },

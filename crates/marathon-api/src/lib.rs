@@ -132,6 +132,9 @@ pub struct ChannelSummary {
 pub struct NextItem {
     pub item: Item,
     pub stream_url: String,
+    /// Where to stream just `item`'s audio from, as in [`Now::audio_url`].
+    #[serde(default)]
+    pub audio_url: Option<String>,
 }
 
 /// What a channel is playing: the response to `GET /channels/{id}/now`,
@@ -149,6 +152,12 @@ pub struct Now {
     pub position_ms: u64,
     /// Where to stream `item` from.
     pub stream_url: String,
+    /// Where to stream just `item`'s audio from (PLAN.md M12): Ogg Opus,
+    /// with no `Range` support; add `?start_ms=` to start partway in.
+    /// `None` when the server has no audio streams (no ffmpeg, or turned
+    /// off).
+    #[serde(default)]
+    pub audio_url: Option<String>,
     /// The item the channel will advance to, for prefetching. Computed
     /// without moving the channel. `None` only if it cannot be determined.
     pub next: Option<NextItem>,

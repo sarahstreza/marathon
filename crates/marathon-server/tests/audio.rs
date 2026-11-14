@@ -386,3 +386,27 @@ async fn streams_are_limited_and_dropping_one_kills_its_ffmpeg() {
     assert!(gone, "ffmpeg still running after its response was dropped");
     assert_eq!(open().await.unwrap().status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn now_offers_audio_urls_exactly_when_audio_is_on() {
+    if !have("ffmpeg") {
+        return;
+    }
+    let env = TestEnv::new();
+    let on = app_with_audio(&env, "").await;
+    let tuned = now(&on, "show").await;
+    let id = tuned["item"]["id"].as_str().unwrap();
+    let next = tuned["next"]["item"]["id"].as_str().unwrap();
+    assert_eq!(tuned["audio_url"], format!("/api/v1/audio/{id}"));
+    assert_eq!(tuned["next"]["audio_url"], format!("/api/v1/audio/{next}"));
+    assert_eq!(
+        advance(&on, "show").await["audio_url"],
+        format!("/api/v1/audio/{next}")
+    );
+    drop(on);
+
+    let off = env.app().await;
+    let tuned = now(&off, "show").await;
+    assert_eq!(tuned["audio_url"], serde_json::Value::Null);
+    assert_eq!(tuned["next"]["audio_url"], serde_json::Value::Null);
+}

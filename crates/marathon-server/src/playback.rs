@@ -110,7 +110,7 @@ impl App {
             resolved.position_ms,
         )
         .await?;
-        let now = to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
+        let now = self.to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
         // Probing can take a moment; other requests needn't wait for it.
         drop(guard);
         Ok(self.with_probed_durations(now).await)
@@ -228,7 +228,7 @@ impl App {
             self.record(channel_id, &from, client_id, kind, from.position_ms)
                 .await?;
         }
-        let now = to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
+        let now = self.to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
         drop(guard);
         Ok(self.with_probed_durations(now).await)
     }
@@ -479,37 +479,43 @@ fn channel_refs(data: &Data, resolved: &Resolved) -> Vec<ChannelRef> {
         .collect()
 }
 
-fn to_now(
-    data: &Data,
-    channel_id: &str,
-    resolved: &Resolved,
-    next: Option<&Resolved>,
-    warnings: Vec<String>,
-) -> Result<Now, ApiError> {
-    let channel = &data
-        .channels
-        .get(channel_id)
-        .ok_or_else(|| ApiError::NotFound(format!("no channel {channel_id}")))?
-        .config;
-    let next = next
-        .map(|next| {
-            Ok::<_, ApiError>(NextItem {
-                item: to_api_item(&next.item)?,
-                stream_url: paths::stream(&next.item.id),
+impl App {
+    fn to_now(
+        &self,
+        data: &Data,
+        channel_id: &str,
+        resolved: &Resolved,
+        next: Option<&Resolved>,
+        warnings: Vec<String>,
+    ) -> Result<Now, ApiError> {
+        let channel = &data
+            .channels
+            .get(channel_id)
+            .ok_or_else(|| ApiError::NotFound(format!("no channel {channel_id}")))?
+            .config;
+        let audio_url = |id: &str| self.audio_enabled().then(|| paths::audio(id));
+        let next = next
+            .map(|next| {
+                Ok::<_, ApiError>(NextItem {
+                    item: to_api_item(&next.item)?,
+                    stream_url: paths::stream(&next.item.id),
+                    audio_url: audio_url(&next.item.id),
+                })
             })
+            .transpose()?;
+        Ok(Now {
+            channel_id: channel_id.to_owned(),
+            channel_number: channel.number.unwrap_or(0),
+            channel_name: channel.name.clone(),
+            item: to_api_item(&resolved.item)?,
+            position_ms: to_u64(resolved.position_ms),
+            stream_url: paths::stream(&resolved.item.id),
+            audio_url: audio_url(&resolved.item.id),
+            next,
+            resolution_path: channel_refs(data, resolved),
+            warnings,
         })
-        .transpose()?;
-    Ok(Now {
-        channel_id: channel_id.to_owned(),
-        channel_number: channel.number.unwrap_or(0),
-        channel_name: channel.name.clone(),
-        item: to_api_item(&resolved.item)?,
-        position_ms: to_u64(resolved.position_ms),
-        stream_url: paths::stream(&resolved.item.id),
-        next,
-        resolution_path: channel_refs(data, resolved),
-        warnings,
-    })
+    }
 }
 
 /// The sidecar subtitles stored for an item.
