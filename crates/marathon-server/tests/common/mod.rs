@@ -117,10 +117,23 @@ impl TestEnv {
         fs::write(path, video_bytes(rel)).unwrap();
     }
 
-    /// Config TOML with the given `[server]` extras and channels.
+    /// Config TOML with the given `[server]` extras and channels. Audio
+    /// streams are off, so results don't depend on whether ffmpeg is
+    /// installed; see [`TestEnv::config_toml_with_audio`].
     pub fn config_toml(&self, server_extra: &str, channels: &str) -> String {
+        self.config_toml_with_audio(server_extra, "enabled = false", channels)
+    }
+
+    /// Like [`TestEnv::config_toml`], with the given `[audio]` table body.
+    pub fn config_toml_with_audio(
+        &self,
+        server_extra: &str,
+        audio: &str,
+        channels: &str,
+    ) -> String {
         format!(
             "[server]\nbind = \"127.0.0.1:0\"\ndata_dir = {data:?}\n{server_extra}\n\
+             [audio]\n{audio}\n\
              [[source]]\nid = \"lib\"\nkind = \"filesystem\"\nroot = {root:?}\n{channels}",
             data = self.data_dir().display().to_string(),
             root = self.library().display().to_string(),

@@ -95,7 +95,7 @@ impl App {
 
     /// `GET /channels/{id}/now`: tunes in. Records a `tuned` event.
     pub async fn now(&self, channel_id: &str, client_id: Option<&str>) -> Result<Now, ApiError> {
-        let _guard = self.inner.playback.lock().await;
+        let guard = self.inner.playback.lock().await;
         let (data, rows) = self.load_data(channel_id).await?;
         let mut resolver = Resolver::new(&data, rows, random_seed);
         let resolved = self.resolve(&mut resolver, channel_id).await?;
@@ -110,7 +110,10 @@ impl App {
             resolved.position_ms,
         )
         .await?;
-        to_now(&data, channel_id, &resolved, next.as_ref(), warnings)
+        let now = to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
+        // Probing can take a moment; other requests needn't wait for it.
+        drop(guard);
+        Ok(self.with_probed_durations(now).await)
     }
 
     /// `POST /channels/{id}/progress`: saves the playback position. For a
@@ -201,7 +204,7 @@ impl App {
         client_id: Option<&str>,
         kind: EventKind,
     ) -> Result<Now, ApiError> {
-        let _guard = self.inner.playback.lock().await;
+        let guard = self.inner.playback.lock().await;
         let (data, rows) = self.load_data(channel_id).await?;
         let mut resolver = Resolver::new(&data, rows, random_seed);
         let from = self.resolve(&mut resolver, channel_id).await?;
@@ -225,7 +228,9 @@ impl App {
             self.record(channel_id, &from, client_id, kind, from.position_ms)
                 .await?;
         }
-        to_now(&data, channel_id, &resolved, next.as_ref(), warnings)
+        let now = to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
+        drop(guard);
+        Ok(self.with_probed_durations(now).await)
     }
 
     /// `GET /channels/{id}/plan`: what the channel will play, starting with

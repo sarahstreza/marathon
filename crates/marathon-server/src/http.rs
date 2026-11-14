@@ -630,7 +630,7 @@ async fn media(app: &App, item_id: &str) -> Result<Media, ApiError> {
 /// Joins a stored relative path onto a source root, refusing anything that
 /// could escape it. Stored paths come from scans and are always plain
 /// relative paths; this is defence in depth.
-fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
+pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     let rel = FsPath::new(rel);
     rel.components()
         .all(|c| matches!(c, Component::Normal(_)))
