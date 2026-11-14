@@ -43,6 +43,10 @@ pub enum ConfigError {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
+    /// The `[audio]` table (PLAN.md M12). Absent means audio streaming with
+    /// the defaults, if ffmpeg can be found; see [`AudioConfig`].
+    #[serde(default)]
+    pub audio: Option<AudioConfig>,
     #[serde(rename = "source", default)]
     pub sources: Vec<SourceConfig>,
     #[serde(rename = "channel", default)]
@@ -81,9 +85,15 @@ impl Config {
     ///   entries are non-empty relative paths that stay inside that path;
     /// - every child channel entry names a configured channel, at most once
     ///   per parent, and channels nest without cycles and no deeper than
-    ///   [`MAX_NESTING_DEPTH`] (PLAN.md M11).
+    ///   [`MAX_NESTING_DEPTH`] (PLAN.md M11);
+    /// - `[audio]`'s bitrate is one Opus supports, and it allows at least
+    ///   one stream.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |msg: String| Err(ConfigError::Invalid(msg));
+
+        if let Some(audio) = &self.audio {
+            audio.validate()?;
+        }
 
         let has_token = self.server.token.as_deref().is_some_and(|t| !t.is_empty());
         if !has_token && !self.server.bind.ip().is_loopback() {
@@ -314,6 +324,60 @@ pub fn expand_home(path: &Path) -> PathBuf {
     match std::env::var_os("HOME") {
         Some(home) => Path::new(&home).join(rest),
         None => path.to_owned(),
+    }
+}
+
+/// The `[audio]` table: audio-only streams (PLAN.md M12), which the server
+/// makes by running ffmpeg. Every field is optional.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioConfig {
+    /// Whether to offer audio streams at all. Even when true, they are
+    /// only offered if `ffmpeg` runs when the server starts.
+    pub enabled: bool,
+    /// The ffmpeg program: a path, or a name looked up on `PATH`.
+    pub ffmpeg: PathBuf,
+    /// The ffprobe program, for durations: a path, or a name on `PATH`.
+    pub ffprobe: PathBuf,
+    /// Opus bitrate of the stereo audio stream, in kbit/s.
+    pub bitrate_kbps: u32,
+    /// How many audio streams (ffmpeg processes) may run at once. Requests
+    /// beyond this get `503`.
+    pub max_streams: u32,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ffmpeg: PathBuf::from("ffmpeg"),
+            ffprobe: PathBuf::from("ffprobe"),
+            bitrate_kbps: 96,
+            max_streams: 4,
+        }
+    }
+}
+
+impl AudioConfig {
+    /// Opus encodes from 6 to 510 kbit/s (libopus's limits).
+    const BITRATES_KBPS: std::ops::RangeInclusive<u32> = 6..=510;
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !Self::BITRATES_KBPS.contains(&self.bitrate_kbps) {
+            return Err(ConfigError::Invalid(format!(
+                "audio.bitrate_kbps is {}; Opus supports {} to {}",
+                self.bitrate_kbps,
+                Self::BITRATES_KBPS.start(),
+                Self::BITRATES_KBPS.end()
+            )));
+        }
+        if self.max_streams == 0 {
+            return Err(ConfigError::Invalid(
+                "audio.max_streams is 0; to turn audio streams off, set audio.enabled = false"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -865,6 +929,52 @@ mod tests {
             .unwrap()
             .validate()
             .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn audio_defaults_and_overrides() {
+        let config = Config::from_toml_str(MINIMAL).unwrap();
+        assert_eq!(config.audio, None);
+        let config = Config::from_toml_str(&format!(
+            "{MINIMAL}
+[audio]
+bitrate_kbps = 64"
+        ))
+        .unwrap();
+        assert_eq!(
+            config.audio,
+            Some(AudioConfig {
+                bitrate_kbps: 64,
+                ..AudioConfig::default()
+            })
+        );
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_bad_audio_settings() {
+        let err = validate(&format!(
+            "{MINIMAL}
+[audio]
+bitrate_kbps = 2"
+        ))
+        .unwrap_err();
+        assert!(err.contains("bitrate_kbps"), "{err}");
+        let err = validate(&format!(
+            "{MINIMAL}
+[audio]
+max_streams = 0"
+        ))
+        .unwrap_err();
+        assert!(err.contains("audio.enabled = false"), "{err}");
+        assert!(
+            Config::from_toml_str(&format!(
+                "{MINIMAL}
+[audio]
+volume = 11"
+            ))
+            .is_err()
+        );
     }
 
     #[test]

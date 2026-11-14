@@ -58,7 +58,7 @@ serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled", "migrate", "macros"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "fs", "io-util", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "fs", "io-util", "time", "process"] }
 # The client end of the control channel (M6). Kept on the version axum's
 # `ws` feature uses (axum 0.8.9: 0.29), so there is one copy; upgrade with
 # axum.

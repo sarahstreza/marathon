@@ -6,6 +6,7 @@ use std::sync::Arc;
 use marathon_api::ScanReport;
 use tokio::sync::Mutex;
 
+use crate::audio::Audio;
 use crate::catalog;
 use crate::config::{Config, ConfigError, Entry, SourceConfig, expand_home};
 use crate::db::{ChannelRow, Db, OpenError, SourceDef};
@@ -67,6 +68,8 @@ pub(crate) struct Inner {
     pub(crate) relay: Relay,
     /// Each source's root directory or Jellyfin client.
     pub(crate) sources: Sources,
+    /// Audio-only streaming (PLAN.md M12), if ffmpeg is available.
+    pub(crate) audio: Option<Audio>,
 }
 
 impl App {
@@ -92,6 +95,7 @@ impl App {
         sync_definitions(&db, &config)
             .await
             .map_err(StartError::Sync)?;
+        let audio = Audio::detect(config.audio.as_ref()).await;
         let app = App {
             inner: Arc::new(Inner {
                 db,
@@ -100,6 +104,7 @@ impl App {
                 scanning: Mutex::new(()),
                 relay: Relay::new(),
                 sources,
+                audio,
             }),
         };
         let report = app.rescan().await.map_err(StartError::Scan)?;
@@ -115,6 +120,12 @@ impl App {
 
     pub fn config(&self) -> &Config {
         &self.inner.config
+    }
+
+    /// Whether the server offers audio-only streams (PLAN.md M12): `[audio]`
+    /// allows them and ffmpeg ran at startup.
+    pub fn audio_enabled(&self) -> bool {
+        self.inner.audio.is_some()
     }
 
     /// The client relay: control channels and the event stream.
