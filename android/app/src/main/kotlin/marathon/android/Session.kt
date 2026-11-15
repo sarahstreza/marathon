@@ -89,6 +89,10 @@ class Session(context: Context, server: ServerSettings, clientId: String, onQuit
     /** Sends [action] from the input called [source]. Any thread. */
     fun send(action: Action, source: String) {
         loop.send(action, source)
+        // Every seek, from any input, shows the banner, whose progress bar
+        // and time jump straight to where it lands (MpvPlayer.seekTarget).
+        // Queued behind the seek, so the banner already shows its target.
+        if (action is Action.SeekRelative) loop.send(Action.ShowInfo, source)
     }
 
     /** Reports progress and stops everything. Blocks briefly. */

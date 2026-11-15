@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,8 +64,16 @@ private val Panel = Color(0xE014161A)
 private const val PROGRESS_REFRESH_MS = 250L
 
 @Composable
-fun OverlayLayer(model: OverlayModel, changes: StateFlow<Long>, player: MpvPlayer, pendingDigits: String) {
+fun OverlayLayer(
+    model: OverlayModel,
+    changes: StateFlow<Long>,
+    player: MpvPlayer,
+    pendingDigits: String,
+) {
     val version by changes.collectAsState()
+    // A seek moves the progress bar at once, not at the next refresh: the
+    // banner is redrawn whenever a new one starts (key).
+    val seekTarget by player.seekTarget.collectAsState()
     var frame by remember { mutableStateOf(model.frame(SystemClock.nowMs())) }
     // Redraw at the display's frame rate only while something animates;
     // otherwise sleep until the next change (the PLAN's "don't spin").
@@ -83,7 +92,7 @@ fun OverlayLayer(model: OverlayModel, changes: StateFlow<Long>, player: MpvPlaye
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // One "point" per 1/540 of the screen height, as on desktop.
         val pt = maxHeight / 540f
-        Banner(frame, player, pt)
+        key(seekTarget) { Banner(frame, player, pt) }
         Guide(frame, pt)
         Toast(frame, pt)
         if (pendingDigits.isNotEmpty()) {
@@ -101,7 +110,11 @@ fun OverlayLayer(model: OverlayModel, changes: StateFlow<Long>, player: MpvPlaye
 private fun Dp.toSp(): TextUnit = value.sp
 
 @Composable
-private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(frame: OverlayFrame, player: MpvPlayer, pt: Dp) {
+private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(
+    frame: OverlayFrame,
+    player: MpvPlayer,
+    pt: Dp,
+) {
     val banner = frame.banner ?: return
     if (frame.bannerOpacity <= 0f) return
     Column(
@@ -125,6 +138,7 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(fr
             Text(it, color = Color.White, fontSize = (pt * 20).toSp(), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.height(pt * 10))
+        // Where a seek is going, else where playback is.
         val position = if (frame.tuning) null else player.positionMs()
         val duration = if (frame.tuning) null else player.durationMs()
         if (position != null && duration != null && duration > 0) {
@@ -137,7 +151,11 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(fr
                 )
                 Spacer(Modifier.width(pt * 12))
                 val paused = if (player.isPaused()) "Paused  " else ""
-                Text("$paused${formatMs(position)} / ${formatMs(duration)}", color = Color(0xFFDDDDDD), fontSize = (pt * 14).toSp())
+                Text(
+                    "$paused${formatMs(position)} / ${formatMs(duration)}",
+                    color = Color(0xFFDDDDDD),
+                    fontSize = (pt * 14).toSp(),
+                )
             }
         } else {
             Spacer(Modifier.height(pt * 4))

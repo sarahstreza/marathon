@@ -247,6 +247,18 @@ Together with the remote API, this covers every §9 action that means anything o
 Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
 `Quit` saves progress and finishes the activity.
 
+### Seeking
+
+Every seek, from any input (double tap, keys, the remote API),
+shows the banner at once, with its progress bar and time already at the
+seek's target. Over the network mpv can take a moment to get there, so
+until playback reaches the target (`PendingSeek`, unit tested),
+`MpvPlayer.positionMs()` reports the target, and a second quick seek
+starts from it. `MpvPlayer` turns `SeekRelative` into an absolute mpv seek
+to that target, so what the bar shows and where mpv lands agree. Targets
+stay inside the item, short of its last second, as audio streams already
+did; a seek that never lands stops standing in after 10 s.
+
 ### Manifest
 
 - Launcher intents for both `LAUNCHER` and `LEANBACK_LAUNCHER`, with a TV banner.
@@ -415,7 +427,9 @@ These need a person and a device. They are restated here with steps:
    `adb install android/app/build/outputs/apk/debug/app-debug.apk`. Enter the
    server URL and token.
 2. **Phone, touch:** swipe up and down to change channel, double-tap to seek,
-   tap for info and the controls, use the guide. Check that every action in §9 that
+   tap for info and the controls, use the guide. Double-tap to seek: the
+   banner appears with the bar and time already moved, before the picture
+   catches up; double-tap three times quickly and it moves 30 s. Check that every action in §9 that
    applies on a phone is reachable.
    With the phone held upright, the Watch screen turns to landscape (either
    way up), and Setup (the controls' Server button) follows the phone again.
