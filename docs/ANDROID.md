@@ -235,6 +235,7 @@ unmapped, and keys Marathon doesn't use (volume, Home) go to the system.
 | Swipe up / down | `ChannelUp` / `ChannelDown`, unless it starts in the system's gesture strip at the top or bottom edge (going home, recent apps, notifications) |
 | Double-tap right / left third | `SeekRelative(+10)` / `SeekRelative(-10)` |
 | Double-tap the middle | `TogglePause` |
+| Drag along the banner's progress bar | Scrubs: `SeekRelative` to where the finger lifts (see "Seeking") |
 | Single tap | `ShowInfo`, and reveals a control strip for 4 s |
 | Control strip | Guide, previous item, pause/play, next item, subtitles, sleep timer, server settings |
 | System back | Clears a half-typed channel number, then `Back` (closes the guide or banner), then leaves the app |
@@ -249,7 +250,7 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
 
 ### Seeking
 
-Every seek, from any input (double tap, keys, the remote API),
+Every seek, from any input (double tap, keys, the remote API, a scrub),
 shows the banner at once, with its progress bar and time already at the
 seek's target. Over the network mpv can take a moment to get there, so
 until playback reaches the target (`PendingSeek`, unit tested),
@@ -258,6 +259,19 @@ starts from it. `MpvPlayer` turns `SeekRelative` into an absolute mpv seek
 to that target, so what the bar shows and where mpv lands agree. Targets
 stay inside the item, short of its last second, as audio streams already
 did; a seek that never lands stops standing in after 10 s.
+
+While the banner shows, a drag that starts on (or within 24 dp of) its
+progress bar scrubs (`Scrub`, unit tested). Dragging the bar's full width
+crosses the whole item. Sliding the finger up off the bar makes the same
+drag move less, for fine positioning: half speed from 48 dp above the bar,
+a quarter from 96 dp, an eighth from 144 dp, and the time says which. Moves
+are relative, so changing speed never makes the target jump. While dragging,
+the bar thickens and shows the target, and the banner stays up; the seek is
+sent once, when the finger lifts (in audio-only mode each seek reopens the
+stream, so seeking as the finger moves would be costly). Because a scrub
+claims the drag from where it starts, moving up during it never changes
+channel. On touch screens the banner sits above the system's bottom gesture
+strip, so the bar can be reached without going home instead.
 
 ### Manifest
 
@@ -429,7 +443,13 @@ These need a person and a device. They are restated here with steps:
 2. **Phone, touch:** swipe up and down to change channel, double-tap to seek,
    tap for info and the controls, use the guide. Double-tap to seek: the
    banner appears with the bar and time already moved, before the picture
-   catches up; double-tap three times quickly and it moves 30 s. Check that every action in §9 that
+   catches up; double-tap three times quickly and it moves 30 s. Tap, then
+   drag along the progress bar: the bar thickens and the time follows the
+   finger, and lifting seeks there. Mid-drag, slide up: the time reads
+   "Half speed", then "Quarter speed", then "Fine", and the same sideways
+   movement moves less; sliding up never changes channel. With gesture
+   navigation, the bar sits clear of the bottom edge, and dragging it
+   never goes home. Check that every action in §9 that
    applies on a phone is reachable.
    With the phone held upright, the Watch screen turns to landscape (either
    way up), and Setup (the controls' Server button) follows the phone again.

@@ -1,17 +1,21 @@
 // The Watch screen: the video, the overlay on top, and (on touch screens)
-// gestures and a control strip that send the same Actions as a remote. In
+// gestures and a control strip that send the same Actions as a remote.
+// Dragging along the banner's progress bar scrubs (ScrubBar). In
 // picture-in-picture it is just the video: the window is too small for
 // the overlay, and the system draws its own controls (Pip). In audio-only
 // mode (PLAN.md M12) there is no video; a card says what's playing.
 package marathon.android.ui
 
+import android.content.pm.PackageManager
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,8 +38,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import marathon.android.MpvPlayer
+import marathon.android.Scrub
 import marathon.android.Session
 import marathon.android.SystemEdges
 import marathon.android.Touch
@@ -53,6 +62,9 @@ private const val CONTROLS_HOLD_MS = 4_000L
 
 /** How far a vertical swipe must travel to change channel. */
 private val SWIPE_THRESHOLD = 80.dp
+
+/** How far around the progress bar a touch still counts as on it. */
+private val SCRUB_SLOP = 24.dp
 
 /**
  * The least depth of the top and bottom strips where swipes belong to the
@@ -87,6 +99,15 @@ fun WatchScreen(
         top = maxOf(minEdge, gestures.getTop(density).toFloat(), mandatory.getTop(density).toFloat()),
         bottom = maxOf(minEdge, gestures.getBottom(density).toFloat(), mandatory.getBottom(density).toFloat()),
     )
+    val scrubBar = remember { ScrubBar() }
+    val scrubSlopPx = with(density) { SCRUB_SLOP.toPx() }
+    // Where the gesture layer sits in the window, to find the bar in it.
+    val origin = remember { object { var at = Offset.Zero } }
+    // On touch screens the banner sits above the bottom system strip, so
+    // its progress bar can be dragged without reaching for the system.
+    val context = LocalContext.current
+    val touch = remember { context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) }
+    val bannerInset = if (touch) with(density) { edges.bottom.toDp() } else 0.dp
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         VideoSurface(session.player)
@@ -95,6 +116,7 @@ fun WatchScreen(
             Box(
                 Modifier
                     .fillMaxSize()
+                    .onGloballyPositioned { origin.at = it.positionInWindow() }
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = {
@@ -105,11 +127,50 @@ fun WatchScreen(
                         )
                     }
                     .pointerInput(edges) {
-                        // A vertical drag, judged from where the finger first
-                        // went down (not where it passed touch slop), so a
-                        // swipe up from the bottom edge counts as the system's.
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            // A drag starting on the progress bar scrubs, whichever
+                            // way it then goes (up makes it finer).
+                            val bar = if (down.position.y < size.height - edges.bottom) {
+                                scrubBar.hit(down.position, origin.at, scrubSlopPx)
+                            } else {
+                                null
+                            }
+                            if (bar != null) {
+                                val player = session.player
+                                val start = player.positionMs()
+                                val duration = player.durationMs()
+                                if (start == null || duration == null || duration <= 0) return@awaitEachGesture
+                                // No drag (a tap): the tap handler has it.
+                                val moved = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                                    ?: return@awaitEachGesture
+                                val scrub = Scrub(start, duration, bar.width, density.density)
+                                var lastX = down.position.x
+                                fun follow(x: Float, y: Float) {
+                                    scrub.move(x - lastX, bar.center.y - y)
+                                    lastX = x
+                                    scrubBar.preview = ScrubPreview(scrub.targetMs, scrub.speed)
+                                }
+                                follow(moved.position.x, moved.position.y)
+                                val lifted = try {
+                                    drag(moved.id) { change ->
+                                        follow(change.position.x, change.position.y)
+                                        change.consume()
+                                    }
+                                } finally {
+                                    scrubBar.preview = null
+                                }
+                                if (lifted) {
+                                    // Relative to where playback is now: it moved on while dragging.
+                                    val seconds = scrub.secondsFrom(player.positionMs() ?: start)
+                                    // Even with nowhere to go, keep the banner up a while.
+                                    send(if (seconds != 0) Action.SeekRelative(seconds) else Action.ShowInfo)
+                                }
+                                return@awaitEachGesture
+                            }
+                            // Otherwise a vertical drag, judged from where the finger
+                            // first went down (not where it passed touch slop), so a
+                            // swipe up from the bottom edge counts as the system's.
                             val slop = awaitVerticalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
                                 ?: return@awaitEachGesture
                             var lastY = slop.position.y
@@ -124,7 +185,7 @@ fun WatchScreen(
                         }
                     },
             )
-            OverlayLayer(session.overlay, session.changes, session.player, pendingDigits)
+            OverlayLayer(session.overlay, session.changes, session.player, pendingDigits, scrubBar, bannerInset)
             if (controlsShownAt > 0) {
                 var visible by remember(controlsShownAt) { mutableIntStateOf(1) }
                 LaunchedEffect(controlsShownAt) {

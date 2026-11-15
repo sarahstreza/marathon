@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,6 +43,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -51,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import marathon.android.MpvPlayer
+import marathon.android.Scrub
 import marathon.core.SystemClock
 import marathon.core.formatMs
 import marathon.core.overlay.OverlayFrame
@@ -69,6 +73,10 @@ fun OverlayLayer(
     changes: StateFlow<Long>,
     player: MpvPlayer,
     pendingDigits: String,
+    /** The progress bar's link to touch input (scrubbing). */
+    scrubBar: ScrubBar,
+    /** Room to leave below the banner, clear of where the system takes swipes. */
+    bottomInset: Dp,
 ) {
     val version by changes.collectAsState()
     // A seek moves the progress bar at once, not at the next refresh: the
@@ -92,7 +100,7 @@ fun OverlayLayer(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // One "point" per 1/540 of the screen height, as on desktop.
         val pt = maxHeight / 540f
-        key(seekTarget) { Banner(frame, player, pt) }
+        key(seekTarget) { Banner(frame, player, pt, scrubBar, bottomInset) }
         Guide(frame, pt)
         Toast(frame, pt)
         if (pendingDigits.isNotEmpty()) {
@@ -114,16 +122,21 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(
     frame: OverlayFrame,
     player: MpvPlayer,
     pt: Dp,
+    scrubBar: ScrubBar,
+    bottomInset: Dp,
 ) {
     val banner = frame.banner ?: return
-    if (frame.bannerOpacity <= 0f) return
+    // A scrub keeps the banner up, fully shown, until the finger lifts.
+    val preview = scrubBar.preview
+    if (frame.bannerOpacity <= 0f && preview == null) return
     Column(
         Modifier
             .align(Alignment.BottomStart)
             .fillMaxWidth()
-            .alpha(frame.bannerOpacity)
+            .alpha(if (preview != null) 1f else frame.bannerOpacity)
             .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xD0000000))))
-            .padding(horizontal = pt * 32, vertical = pt * 24),
+            .padding(horizontal = pt * 32)
+            .padding(top = pt * 24, bottom = pt * 24 + bottomInset),
     ) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(banner.channelNumber.toString(), color = Accent, fontSize = (pt * 40).toSp(), fontWeight = FontWeight.Bold)
@@ -138,21 +151,28 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.Banner(
             Text(it, color = Color.White, fontSize = (pt * 20).toSp(), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.height(pt * 10))
-        // Where a seek is going, else where playback is.
-        val position = if (frame.tuning) null else player.positionMs()
+        // Where a scrub would land, else where a seek is going, else where
+        // playback is: positionMs() covers the last two.
+        val position = if (frame.tuning) null else preview?.targetMs ?: player.positionMs()
         val duration = if (frame.tuning) null else player.durationMs()
         if (position != null && duration != null && duration > 0) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Touch input looks here for the bar, while it shows.
+                DisposableEffect(scrubBar) { onDispose { scrubBar.bounds = null } }
                 LinearProgressIndicator(
                     progress = { (position.toFloat() / duration).coerceIn(0f, 1f) },
                     color = Accent,
                     trackColor = Color(0x55FFFFFF),
-                    modifier = Modifier.weight(1f).height(pt * 4),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(if (preview != null) pt * 8 else pt * 4)
+                        .onGloballyPositioned { scrubBar.bounds = it.boundsInWindow() },
                 )
                 Spacer(Modifier.width(pt * 12))
                 val paused = if (player.isPaused()) "Paused  " else ""
+                val speed = preview?.let { Scrub.speedLabel(it.speed) }?.let { "  ·  $it" }.orEmpty()
                 Text(
-                    "$paused${formatMs(position)} / ${formatMs(duration)}",
+                    "$paused${formatMs(position)} / ${formatMs(duration)}$speed",
                     color = Color(0xFFDDDDDD),
                     fontSize = (pt * 14).toSp(),
                 )
