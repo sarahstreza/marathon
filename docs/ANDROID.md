@@ -415,9 +415,59 @@ A job named `android` in `.github/workflows/ci.yml` runs on ubuntu-latest:
 
 1. `scripts/check-tuner-parity.sh`.
 2. Temurin 25 and `gradle/actions/setup-gradle`.
-3. `./gradlew check :app:assembleDebug`, which covers `:core` tests, `:api`
+3. Decodes the signing key, if the repository has one (see "Signing").
+4. `./gradlew check :app:assembleDebug`, which covers `:core` tests, `:api`
    generation, and app unit tests and lint.
-4. Uploads `app-debug.apk` as a build artifact.
+5. Uploads `app-debug.apk` as a build artifact.
+
+## Signing
+
+Android only installs a build over an existing install if both are signed
+with the same key. Gradle signs debug builds with a per-machine debug key
+(`~/.android/debug.keystore`), and every CI run makes a new one, so each
+new build had to be uninstalled and reinstalled, losing the server
+settings. So Marathon has a key of its own, kept out of this public
+repository (anyone holding it can sign a build that installs over yours).
+When it is configured, `app/build.gradle.kts` signs debug builds with it;
+when it isn't, builds get the machine's debug key as before. Giving only
+one of the two settings stops the build with an error.
+
+| Setting | Gradle property | Environment (CI) |
+|---|---|---|
+| Keystore (PKCS12) | `marathon.signing.storeFile` | `MARATHON_SIGNING_STORE_FILE` |
+| Its password | `marathon.signing.storePassword` | `MARATHON_SIGNING_STORE_PASSWORD` |
+| Key alias (default `marathon`) | `marathon.signing.keyAlias` | `MARATHON_SIGNING_KEY_ALIAS` |
+| Key password (default: the store's) | `marathon.signing.keyPassword` | `MARATHON_SIGNING_KEY_PASSWORD` |
+
+**Making the key** (once; back it up, since losing it means one more
+uninstall):
+
+```sh
+keytool -genkeypair -storetype PKCS12 -keystore ~/.android/marathon-signing.p12 \
+  -alias marathon -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=Marathon"
+```
+
+**Building with it locally:** in `~/.gradle/gradle.properties` (not the
+project's), readable only by you:
+
+```properties
+marathon.signing.storeFile=/home/you/.android/marathon-signing.p12
+marathon.signing.storePassword=...
+```
+
+**In CI:** add two repository secrets: `MARATHON_SIGNING_KEYSTORE`, the
+keystore in base64 (`base64 -w0 ~/.android/marathon-signing.p12`), and
+`MARATHON_SIGNING_PASSWORD`. The `android` job decodes the keystore into
+the runner's temporary directory, but only for pushes and for pull requests
+from this repository's own branches. A pull request from a fork runs its
+author's code, so it never gets the key: GitHub withholds secrets from fork
+pull requests on the `pull_request` trigger, and the step's own check keeps
+it that way should the trigger change (never move this job to
+`pull_request_target`).
+
+**Checking an APK's key:** `apksigner verify --print-certs app-debug.apk`
+should print `CN=Marathon`. The first install signed with this key still
+needs the old app uninstalled; after that, builds install over each other.
 
 The Rust `check` job also checks that `android/api/openapi.json` matches
 `marathond --print-openapi`, because it already has the Rust toolchain and libmpv.

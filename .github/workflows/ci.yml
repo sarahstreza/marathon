@@ -82,6 +82,27 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
             "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
       - uses: gradle/actions/setup-gradle@v6
+      # Sign with Marathon's key, so each build's APK installs over the last
+      # (docs/ANDROID.md "Signing"). Only for pushes to this repository and
+      # pull requests from its own branches: a pull request from a fork runs
+      # code its author wrote, so it must never see the key. GitHub already
+      # withholds secrets from fork pull requests on `pull_request`; this
+      # check keeps that true even if the trigger changes. This is the only
+      # step that reads the secrets. Without them, the APK gets a throwaway
+      # debug key.
+      - name: Signing key
+        if: >-
+          github.event_name == 'push' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          KEYSTORE: ${{ secrets.MARATHON_SIGNING_KEYSTORE }}
+          PASSWORD: ${{ secrets.MARATHON_SIGNING_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/marathon-signing.p12"
+            echo "MARATHON_SIGNING_STORE_FILE=$RUNNER_TEMP/marathon-signing.p12" >> "$GITHUB_ENV"
+            echo "MARATHON_SIGNING_STORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          fi
       - run: ./gradlew check :app:assembleDebug
       - uses: actions/upload-artifact@v7
         with:
