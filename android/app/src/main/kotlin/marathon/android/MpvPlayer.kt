@@ -7,8 +7,12 @@
 // latest load's fate is read from properties instead:
 //
 // - Started: FILE_LOADED while mpv's `path` is the URL we last loaded.
-// - Ended: keep-open=yes makes mpv pause on the last frame at the end of a
+// - Ended: keep-open=yes makes mpv stay on the last frame at the end of a
 //   file instead of unloading it, so `eof-reached` turning true is the end.
+//   keep-open-pause=no stops it also pausing there. With that pause, the
+//   unpause load() sends before `loadfile` was often lost on network
+//   streams: the next file loaded paused on its first frame, and as `pause`
+//   never changed, mpv never told us, so the app showed it as playing.
 // - Failed: mpv only goes idle (`idle-active`) when the file it was on
 //   could not be opened or broke while playing, or when we stopped it.
 //   Replacing a file never passes through idle. So idle while the latest
@@ -460,8 +464,10 @@ class MpvPlayer(
             // Stay alive with nothing loaded (between items, before tuning).
             "idle" to "yes",
             "force-window" to "no",
-            // At the end of a file, pause there instead of unloading: see the file comment.
+            // At the end of a file, stay there instead of unloading, and
+            // don't pause: see the file comment.
             "keep-open" to "yes",
+            "keep-open-pause" to "no",
             // Marathon is the UI.
             "osd-level" to "0",
             "input-default-bindings" to "no",
