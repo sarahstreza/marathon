@@ -146,9 +146,12 @@ makes "passes the same scenarios as the Rust version" checkable by machine.
 `MpvPlayer` implements `Player` using `dev.jdtech.mpv.MPVLib`:
 
 - Options: `vo=gpu`, `gpu-context=android`, `hwdec=mediacodec-copy`,
-  `keep-open=yes`. With `keep-open`, mpv pauses on the last frame instead of
-  unloading. `http-header-fields` carries `Authorization: Bearer <token>` when
-  a token is set.
+  `keep-open=yes`, `keep-open-pause=no`. With `keep-open`, mpv stays on the
+  last frame instead of unloading. It must not also pause there: on
+  network streams the unpause sent with the next load was often lost, so the
+  next item loaded paused on its first frame while the app thought it played.
+  `http-header-fields` carries `Authorization: Bearer <token>` when a token
+  is set.
 - Video draws into a `SurfaceView` hosted by Compose (`AndroidView`). It is
   attached with `attachSurface`, and detached when the surface is destroyed.
 - `MPVLib`'s event callback passes only the event ID, not `end-file`'s
