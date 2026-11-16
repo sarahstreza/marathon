@@ -24,8 +24,13 @@ pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod embedded;
+// Used by the session code in the next commit, which drops these allows.
+#[allow(dead_code)]
+mod encode;
 mod encoder;
 mod error;
+#[allow(dead_code)]
+mod hls;
 pub mod http;
 pub mod jellyfin;
 mod media;
