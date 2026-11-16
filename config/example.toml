@@ -21,6 +21,21 @@ data_dir = "~/.local/share/marathon"   # SQLite lives here
 # bitrate_kbps = 96                    # Opus bitrate, 6 to 510
 # max_streams = 4                      # at once; more are refused (503)
 
+# Live transcoding (PLAN.md M13): lets a client pick a lower quality than
+# the original file. Needs ffmpeg with an H.264 encoder on PATH; the server
+# picks the best encoder that works (NVENC, QSV, VAAPI, VideoToolbox, then
+# software) and logs the choice. Every key is optional.
+# [transcode]
+# enabled = true
+# ffmpeg = "ffmpeg"                    # a path, or a name on PATH
+# ffprobe = "ffprobe"
+# hardware = "auto"                    # nvenc | qsv | vaapi | videotoolbox | software
+# vaapi_device = "/dev/dri/renderD128"
+# max_sessions = 3                     # at once; beyond this, play the original
+# segment_seconds = 6                  # HLS segment length, 2 to 30
+# idle_timeout_s = 120                 # stop encoding after this long unwatched
+# auto_headroom_percent = 60           # share of measured bandwidth `auto` uses
+
 # A filesystem source. Mounted SMB/NFS shares work as ordinary paths.
 [[source]]
 id = "nas"

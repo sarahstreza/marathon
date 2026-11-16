@@ -47,6 +47,10 @@ pub struct Config {
     /// the defaults, if ffmpeg can be found; see [`AudioConfig`].
     #[serde(default)]
     pub audio: Option<AudioConfig>,
+    /// The `[transcode]` table (PLAN.md M13). Absent means live transcoding
+    /// with the defaults, if ffmpeg can be found; see [`TranscodeConfig`].
+    #[serde(default)]
+    pub transcode: Option<TranscodeConfig>,
     #[serde(rename = "source", default)]
     pub sources: Vec<SourceConfig>,
     #[serde(rename = "channel", default)]
@@ -87,12 +91,16 @@ impl Config {
     ///   per parent, and channels nest without cycles and no deeper than
     ///   [`MAX_NESTING_DEPTH`] (PLAN.md M11);
     /// - `[audio]`'s bitrate is one Opus supports, and it allows at least
-    ///   one stream.
+    ///   one stream;
+    /// - `[transcode]`'s limits are in range (see [`TranscodeConfig`]).
     pub fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |msg: String| Err(ConfigError::Invalid(msg));
 
         if let Some(audio) = &self.audio {
             audio.validate()?;
+        }
+        if let Some(transcode) = &self.transcode {
+            transcode.validate()?;
         }
 
         let has_token = self.server.token.as_deref().is_some_and(|t| !t.is_empty());
@@ -376,6 +384,89 @@ impl AudioConfig {
                 "audio.max_streams is 0; to turn audio streams off, set audio.enabled = false"
                     .to_owned(),
             ));
+        }
+        Ok(())
+    }
+}
+
+/// Which video encoder live transcoding uses (`[transcode] hardware`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Hardware {
+    /// Try each hardware encoder, then software, and use the first that
+    /// works.
+    #[default]
+    Auto,
+    Nvenc,
+    Qsv,
+    Vaapi,
+    VideoToolbox,
+    /// `libx264`, or `libopenh264` if that is all ffmpeg has.
+    Software,
+}
+
+/// The `[transcode]` table: live transcoding (PLAN.md M13), which the
+/// server does by running ffmpeg. Every field is optional.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TranscodeConfig {
+    /// Whether to offer transcoding at all. Even when true, it is only
+    /// offered if `ffmpeg` runs and has a working H.264 encoder when the
+    /// server starts.
+    pub enabled: bool,
+    /// The ffmpeg program: a path, or a name looked up on `PATH`.
+    pub ffmpeg: PathBuf,
+    /// The ffprobe program: a path, or a name on `PATH`.
+    pub ffprobe: PathBuf,
+    pub hardware: Hardware,
+    /// The render node VAAPI uses.
+    pub vaapi_device: PathBuf,
+    /// How many transcoding sessions (ffmpeg processes) may run at once.
+    /// Beyond this, playback falls back to the original file.
+    pub max_sessions: u32,
+    /// Length of one HLS segment, in seconds.
+    pub segment_seconds: u32,
+    /// How long a session may go without a request before its ffmpeg is
+    /// stopped, in seconds.
+    pub idle_timeout_s: u32,
+    /// The share of a client's measured bandwidth the `auto` profile
+    /// plans to use, in percent.
+    pub auto_headroom_percent: u32,
+}
+
+impl Default for TranscodeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ffmpeg: PathBuf::from("ffmpeg"),
+            ffprobe: PathBuf::from("ffprobe"),
+            hardware: Hardware::Auto,
+            vaapi_device: PathBuf::from("/dev/dri/renderD128"),
+            max_sessions: 3,
+            segment_seconds: 6,
+            idle_timeout_s: 120,
+            auto_headroom_percent: 60,
+        }
+    }
+}
+
+impl TranscodeConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |msg: &str| Err(ConfigError::Invalid(msg.to_owned()));
+        if self.max_sessions == 0 {
+            return invalid(
+                "transcode.max_sessions is 0; to turn transcoding off, set \
+                 transcode.enabled = false",
+            );
+        }
+        if !(2..=30).contains(&self.segment_seconds) {
+            return invalid("transcode.segment_seconds must be from 2 to 30");
+        }
+        if self.idle_timeout_s < 10 {
+            return invalid("transcode.idle_timeout_s must be at least 10");
+        }
+        if !(10..=100).contains(&self.auto_headroom_percent) {
+            return invalid("transcode.auto_headroom_percent must be from 10 to 100");
         }
         Ok(())
     }
@@ -975,6 +1066,49 @@ volume = 11"
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn transcode_defaults_and_overrides() {
+        let config = Config::from_toml_str(MINIMAL).unwrap();
+        assert_eq!(config.transcode, None);
+        let config = Config::from_toml_str(&format!(
+            "{MINIMAL}
+[transcode]
+hardware = \"videotoolbox\"
+max_sessions = 1"
+        ))
+        .unwrap();
+        assert_eq!(
+            config.transcode,
+            Some(TranscodeConfig {
+                hardware: Hardware::VideoToolbox,
+                max_sessions: 1,
+                ..TranscodeConfig::default()
+            })
+        );
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_bad_transcode_settings() {
+        for (setting, expect) in [
+            ("max_sessions = 0", "transcode.enabled = false"),
+            ("segment_seconds = 1", "segment_seconds"),
+            ("segment_seconds = 60", "segment_seconds"),
+            ("idle_timeout_s = 2", "idle_timeout_s"),
+            ("auto_headroom_percent = 0", "auto_headroom_percent"),
+            ("auto_headroom_percent = 150", "auto_headroom_percent"),
+        ] {
+            let err = validate(&format!("{MINIMAL}\n[transcode]\n{setting}")).unwrap_err();
+            assert!(err.contains(expect), "{setting}: {err}");
+        }
+        for bad in ["hardware = \"quantum\"", "bitrate = 3"] {
+            assert!(
+                Config::from_toml_str(&format!("{MINIMAL}\n[transcode]\n{bad}")).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
