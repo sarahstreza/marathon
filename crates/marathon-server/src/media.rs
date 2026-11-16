@@ -21,6 +21,7 @@ use tokio::process::Command;
 
 use crate::app::App;
 use crate::audio::{Input, file_url};
+use crate::db::ItemRow;
 use crate::http::safe_join;
 use crate::sources::Source;
 
@@ -317,6 +318,44 @@ async fn probe(ffprobe: &Path, input: &Input) -> Result<MediaInfo, String> {
 }
 
 impl App {
+    /// The ffprobe to use, if any runs: the transcoding settings' one,
+    /// else the audio settings'.
+    pub(crate) fn ffprobe(&self) -> Option<&Path> {
+        self.inner
+            .transcode
+            .as_ref()
+            .and_then(|t| t.ffprobe.as_deref())
+            .or_else(|| self.inner.audio.as_ref()?.ffprobe.as_deref())
+    }
+
+    fn is_unprobeable(&self, item_id: &str) -> bool {
+        self.inner
+            .unprobeable
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(item_id)
+    }
+
+    fn mark_unprobeable(&self, item_id: &str) {
+        self.inner
+            .unprobeable
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(item_id.to_owned());
+    }
+
+    /// Where ffmpeg and ffprobe read the item `row` from, or `None` if its
+    /// source is gone or its path is not a plain relative one.
+    pub(crate) fn input_for_row(&self, row: &ItemRow) -> Option<Input> {
+        Some(match self.source(&row.source_id)? {
+            Source::Filesystem { root } => Input::File(safe_join(root, &row.path)?),
+            Source::Jellyfin(client) => {
+                let (url, headers) = client.ffmpeg_input(row.external_id.as_deref()?);
+                Input::Http { url, headers }
+            }
+        })
+    }
+
     /// What is known about an item's media, probing it (once) if need be.
     ///
     /// The result is stored in `items.media_json` and served from there
@@ -327,8 +366,7 @@ impl App {
     ///
     /// Probing also fills in a missing duration.
     pub(crate) async fn media_info(&self, item_id: &str) -> Option<MediaInfo> {
-        let audio = self.inner.audio.as_ref()?;
-        let ffprobe = audio.ffprobe.as_ref()?;
+        let ffprobe = self.ffprobe()?;
         let row = self.db().item(item_id).await.ok().flatten()?;
         if let Some(json) = self.db().media_json(item_id).await.ok().flatten() {
             match serde_json::from_str(&json) {
@@ -338,16 +376,10 @@ impl App {
                 }
             }
         }
-        if audio.is_unprobeable(item_id) || row.missing {
+        if self.is_unprobeable(item_id) || row.missing {
             return None;
         }
-        let input = match self.source(&row.source_id)? {
-            Source::Filesystem { root } => Input::File(safe_join(root, &row.path)?),
-            Source::Jellyfin(client) => {
-                let (url, headers) = client.ffmpeg_input(row.external_id.as_deref()?);
-                Input::Http { url, headers }
-            }
-        };
+        let input = self.input_for_row(&row)?;
         match probe(ffprobe, &input).await {
             Ok(info) => {
                 tracing::debug!(item = item_id, "probed media");
@@ -373,7 +405,7 @@ impl App {
             Err(reason) => {
                 tracing::info!(item = item_id, path = %row.path, %reason,
                     "cannot probe the item; it stays without media info");
-                audio.mark_unprobeable(item_id);
+                self.mark_unprobeable(item_id);
                 None
             }
         }

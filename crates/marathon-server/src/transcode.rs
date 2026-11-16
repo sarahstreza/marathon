@@ -24,6 +24,9 @@ use crate::encoder::{self, Capabilities};
 #[derive(Debug)]
 pub(crate) struct Transcode {
     pub(crate) ffmpeg: PathBuf,
+    /// The ffprobe program, if it runs. Without it items cannot be
+    /// probed, so nothing can be transcoded.
+    pub(crate) ffprobe: Option<PathBuf>,
     /// What the encoder detection found.
     pub(crate) capabilities: Capabilities,
     pub(crate) config: TranscodeConfig,
@@ -72,8 +75,17 @@ impl Transcode {
                  when transcoded"
             );
         }
+        let ffprobe = match crate::audio::runs(&config.ffprobe).await {
+            Ok(()) => Some(config.ffprobe.clone()),
+            Err(reason) => {
+                tracing::warn!(ffprobe = %config.ffprobe.display(), %reason,
+                    "ffprobe is not usable, so items cannot be probed for transcoding");
+                None
+            }
+        };
         Some(Self {
             ffmpeg: config.ffmpeg.clone(),
+            ffprobe,
             capabilities,
             sessions: Arc::new(Semaphore::new(
                 usize::try_from(config.max_sessions).unwrap_or(usize::MAX),

@@ -180,6 +180,18 @@ pub(crate) enum Decision {
     },
 }
 
+/// The picture height and video bitrate to encode `rung` at for `media`,
+/// whose picture is `source_height` tall: the rung's, but never scaled up
+/// and never spending more bitrate than the source has.
+pub(crate) fn output_for(rung: &Rung, media: &MediaInfo, source_height: u32) -> (u32, u32) {
+    (
+        rung.height.min(source_height),
+        media
+            .bitrate_kbps
+            .map_or(rung.video_kbps, |own| rung.video_kbps.min(own)),
+    )
+}
+
 /// Whether the client can play `media`'s original file as it is.
 pub(crate) fn direct_play_ok(media: &MediaInfo, caps: &Capabilities) -> bool {
     let Some(video) = &media.video else {
@@ -232,12 +244,13 @@ pub(crate) fn decide(
     let Some(video) = &media.video else {
         return Decision::Direct;
     };
-    let transcode = |rung: &Rung| Decision::Transcode {
-        profile: rung.id.clone(),
-        height: rung.height.min(video.height),
-        video_kbps: media
-            .bitrate_kbps
-            .map_or(rung.video_kbps, |own| rung.video_kbps.min(own)),
+    let transcode = |rung: &Rung| {
+        let (height, video_kbps) = output_for(rung, media, video.height);
+        Decision::Transcode {
+            profile: rung.id.clone(),
+            height,
+            video_kbps,
+        }
     };
     match choice {
         Choice::Original => Decision::Direct,

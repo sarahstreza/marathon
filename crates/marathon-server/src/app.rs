@@ -73,6 +73,9 @@ pub(crate) struct Inner {
     pub(crate) audio: Option<Audio>,
     /// Live transcoding (PLAN.md M13), if ffmpeg has a working encoder.
     pub(crate) transcode: Option<Transcode>,
+    /// Items ffprobe could not read, so they are not probed on every
+    /// tune-in. Forgotten when the server restarts.
+    pub(crate) unprobeable: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl App {
@@ -110,6 +113,7 @@ impl App {
                 sources,
                 audio,
                 transcode,
+                unprobeable: Default::default(),
             }),
         };
         let report = app.rescan().await.map_err(StartError::Scan)?;

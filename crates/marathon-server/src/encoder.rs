@@ -73,6 +73,35 @@ impl Encoder {
     pub(crate) fn is_hardware(self) -> bool {
         !matches!(self, Encoder::X264 | Encoder::OpenH264)
     }
+
+    /// ffmpeg arguments, before the input, that open the device the
+    /// encoder runs on.
+    pub(crate) fn device_args(self, vaapi_device: &Path) -> Vec<OsString> {
+        match self {
+            Encoder::Vaapi => vec!["-vaapi_device".into(), vaapi_device.into()],
+            Encoder::Qsv => ["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]
+                .map(OsString::from)
+                .to_vec(),
+            _ => vec![],
+        }
+    }
+
+    /// The filter that ends a `-vf` chain for this encoder: it hands the
+    /// frames to the device. `None` for encoders that take ordinary frames
+    /// (the caller makes them `yuv420p`).
+    pub(crate) fn upload_filter(self) -> Option<&'static str> {
+        match self {
+            Encoder::Vaapi => Some("format=nv12,hwupload"),
+            Encoder::Qsv => Some("format=nv12,hwupload=extra_hw_frames=64"),
+            _ => None,
+        }
+    }
+
+    /// Whether the encoder's device is ffmpeg's one filter device, which
+    /// leaves none for a tone mapping filter that needs its own.
+    fn takes_the_filter_device(self) -> bool {
+        matches!(self, Encoder::Vaapi | Encoder::Qsv)
+    }
 }
 
 /// A way of mapping HDR video down to SDR, in the order detection prefers
@@ -87,29 +116,32 @@ pub(crate) enum ToneMap {
 impl ToneMap {
     const PREFERENCE: [ToneMap; 3] = [ToneMap::OpenCl, ToneMap::Placebo, ToneMap::Zscale];
 
-    /// ffmpeg arguments that apply the tone mapping to a test source and
-    /// leave 8-bit `yuv420p`, as a real transcode needs.
-    fn args(self) -> Vec<&'static str> {
+    /// ffmpeg arguments, before the input, that set up the device the
+    /// filter runs on. Only OpenCL needs one.
+    pub(crate) fn device_args(self) -> Vec<&'static str> {
         match self {
-            ToneMap::OpenCl => vec![
-                "-init_hw_device",
-                "opencl=ocl",
-                "-filter_hw_device",
-                "ocl",
-                "-vf",
+            ToneMap::OpenCl => vec!["-init_hw_device", "opencl=ocl", "-filter_hw_device", "ocl"],
+            ToneMap::Placebo | ToneMap::Zscale => vec![],
+        }
+    }
+
+    /// The filter chain that maps an HDR picture to 8-bit SDR
+    /// `yuv420p`, for use in `-vf` (after scaling, so it runs on the
+    /// output's pixels).
+    pub(crate) fn filter(self) -> &'static str {
+        match self {
+            ToneMap::OpenCl => {
                 "format=p010,hwupload,tonemap_opencl=tonemap=bt2390:format=nv12,hwdownload,\
-                 format=nv12",
-            ],
-            ToneMap::Placebo => vec![
-                "-vf",
+                 format=nv12,format=yuv420p"
+            }
+            ToneMap::Placebo => {
                 "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:\
-                 color_trc=bt709:format=yuv420p",
-            ],
-            ToneMap::Zscale => vec![
-                "-vf",
+                 color_trc=bt709:format=yuv420p"
+            }
+            ToneMap::Zscale => {
                 "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable,\
-                 zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
-            ],
+                 zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+            }
         }
     }
 }
@@ -130,27 +162,12 @@ fn test_encode_args(encoder: Encoder, vaapi_device: &Path) -> Vec<OsString> {
         .into_iter()
         .map(OsString::from)
         .collect();
-    match encoder {
-        Encoder::Vaapi => {
-            args.extend(["-vaapi_device".into(), vaapi_device.into()]);
-        }
-        Encoder::Qsv => {
-            args.extend(
-                ["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"].map(OsString::from),
-            );
-        }
-        _ => {}
-    }
+    args.extend(encoder.device_args(vaapi_device));
     // 256x144 is above the minimum size some hardware encoders accept.
     args.extend(["-f", "lavfi", "-i", "testsrc=s=256x144:r=10:d=1"].map(OsString::from));
-    match encoder {
-        Encoder::Vaapi => {
-            args.extend(["-vf", "format=nv12,hwupload"].map(OsString::from));
-        }
-        Encoder::Qsv => {
-            args.extend(["-vf", "format=nv12,hwupload=extra_hw_frames=64"].map(OsString::from));
-        }
-        _ => args.extend(["-pix_fmt", "yuv420p"].map(OsString::from)),
+    match encoder.upload_filter() {
+        Some(filter) => args.extend(["-vf".into(), filter.into()]),
+        None => args.extend(["-pix_fmt", "yuv420p"].map(OsString::from)),
     }
     args.extend(["-c:v".into(), encoder.name().into()]);
     args.extend(["-f", "null", "-"].map(OsString::from));
@@ -175,7 +192,10 @@ fn test_tonemap_args(tonemap: ToneMap) -> Vec<OsString> {
         ]
         .map(OsString::from),
     );
-    args.extend(tonemap.args().into_iter().map(OsString::from));
+    // The device arguments come before the input in a real run, but a
+    // filter device may be given anywhere among the options.
+    args.extend(tonemap.device_args().into_iter().map(OsString::from));
+    args.extend(["-vf".into(), tonemap.filter().into()]);
     args.extend(["-c:v", "libx264", "-f", "null", "-"].map(OsString::from));
     args
 }
@@ -217,6 +237,11 @@ pub(crate) async fn detect(
 
     let mut tonemap = None;
     for candidate in ToneMap::PREFERENCE {
+        // A filter that needs its own device cannot share ffmpeg's one
+        // with an encoder that already uses it.
+        if candidate == ToneMap::OpenCl && encoder.takes_the_filter_device() {
+            continue;
+        }
         if succeeds(ffmpeg, test_tonemap_args(candidate)).await {
             tonemap = Some(candidate);
             break;

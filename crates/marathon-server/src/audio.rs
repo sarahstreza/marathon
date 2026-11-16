@@ -23,11 +23,10 @@
 //! when it first hands it out in a `now` without a duration (see the
 //! `media` module). Jellyfin reports durations itself.
 
-use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
@@ -66,9 +65,6 @@ pub(crate) struct Audio {
     pub(crate) bitrate_kbps: u32,
     /// One permit per ffmpeg process allowed to run at once.
     pub(crate) streams: Arc<Semaphore>,
-    /// Items ffprobe could not find a duration for, so they are not probed
-    /// on every tune-in. Forgotten when the server restarts.
-    unprobeable: Mutex<HashSet<String>>,
 }
 
 impl Audio {
@@ -113,7 +109,6 @@ impl Audio {
             streams: Arc::new(Semaphore::new(
                 usize::try_from(config.max_streams).unwrap_or(usize::MAX),
             )),
-            unprobeable: Mutex::new(HashSet::new()),
         })
     }
 }
@@ -291,23 +286,6 @@ pub(crate) fn ffmpeg_args(input: &Input, start_ms: u64, bitrate_kbps: u32) -> Ve
     args
 }
 
-impl Audio {
-    /// Whether probing this item failed before (see `media::App::media_info`).
-    pub(crate) fn is_unprobeable(&self, item_id: &str) -> bool {
-        self.unprobeable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(item_id)
-    }
-
-    pub(crate) fn mark_unprobeable(&self, item_id: &str) {
-        self.unprobeable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(item_id.to_owned());
-    }
-}
-
 /// A local path as an ffmpeg `file:` URL, so a name that looks like an
 /// option or another protocol (`-x.mkv`, `http:...`) is still a file.
 pub(crate) fn file_url(path: &Path) -> std::ffi::OsString {
@@ -340,7 +318,7 @@ async fn runs_with_opus(ffmpeg: &Path) -> Result<(), String> {
 
 /// Whether `program -version` runs and succeeds (ffmpeg and ffprobe both
 /// take it). The error says why not.
-async fn runs(program: &Path) -> Result<(), String> {
+pub(crate) async fn runs(program: &Path) -> Result<(), String> {
     let mut command = Command::new(program);
     command
         .arg("-version")
