@@ -84,14 +84,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.sink = { level, message ->
-            when (level) {
-                Log.Level.Debug -> android.util.Log.d(TAG, message)
-                Log.Level.Info -> android.util.Log.i(TAG, message)
-                Log.Level.Warn -> android.util.Log.w(TAG, message)
-                Log.Level.Error -> android.util.Log.e(TAG, message)
-            }
-        }
+        installAndroidLog()
         settings = Settings(this)
         clientId = settings.clientId()
         SessionHolder.attach(this)
@@ -321,9 +314,5 @@ class MainActivity : ComponentActivity() {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-    }
-
-    private companion object {
-        const val TAG = "Marathon"
     }
 }
