@@ -187,3 +187,103 @@ async fn profiles_reject_a_malformed_request() {
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
     }
 }
+
+fn settings_uri(client: &str) -> String {
+    format!("/api/v1/clients/{client}/playback")
+}
+
+async fn put_settings(app: &App, client: &str, body: Value) -> common::Reply {
+    common::call(app, axum::http::Method::PUT, &settings_uri(client))
+        .json(body)
+        .send()
+        .await
+}
+
+#[tokio::test]
+async fn a_client_with_no_settings_gets_the_defaults() {
+    let env = TestEnv::new();
+    let app = env.app().await;
+    let reply = get(&app, &settings_uri("tablet")).send().await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let settings: Value = reply.json();
+    assert_eq!(settings["profile"], "original");
+    assert_eq!(settings["measured_kbps"], Value::Null);
+    assert_eq!(settings["capabilities"]["video"], json!([]));
+    assert_eq!(settings["capabilities"]["hls"], false);
+}
+
+#[tokio::test]
+async fn settings_round_trip_and_survive_a_restart() {
+    let env = TestEnv::new();
+    let body = json!({
+        "capabilities": capabilities(true),
+        "profile": "auto",
+        "measured_kbps": 12_345,
+    });
+    {
+        let app = env.app().await;
+        let reply = put_settings(&app, "tablet", body.clone()).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        let stored: Value = get(&app, &settings_uri("tablet")).send().await.json();
+        assert_eq!(stored["profile"], "auto");
+        assert_eq!(stored["measured_kbps"], 12_345);
+        assert_eq!(stored["capabilities"]["video"][0]["codec"], "h264");
+        assert_eq!(stored["capabilities"]["audio_codecs"], json!(["aac"]));
+        // Clients are told apart.
+        let other: Value = get(&app, &settings_uri("phone")).send().await.json();
+        assert_eq!(other["profile"], "original");
+        // A second PUT replaces the first.
+        let again = put_settings(&app, "tablet", json!({"profile": "original"})).await;
+        assert_eq!(again.status, StatusCode::OK);
+        let replaced: Value = get(&app, &settings_uri("tablet")).send().await.json();
+        assert_eq!(replaced["profile"], "original");
+        assert_eq!(replaced["measured_kbps"], Value::Null);
+        let reply = put_settings(&app, "tablet", body).await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+    // A new server on the same data directory still has them.
+    let app = env.app().await;
+    let stored: Value = get(&app, &settings_uri("tablet")).send().await.json();
+    assert_eq!(stored["profile"], "auto");
+    assert_eq!(stored["measured_kbps"], 12_345);
+}
+
+#[tokio::test]
+async fn unknown_profiles_and_reserved_clients_are_refused() {
+    let env = TestEnv::new();
+    let app = env.app().await;
+    let reply = put_settings(&app, "tablet", json!({"profile": "8k-ultra"})).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    let message = reply.json::<Value>()["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.contains("original, auto, 1080p"), "{message}");
+    // The reserved alias for "the most recent client" is no client's ID.
+    let reply = put_settings(&app, "default", json!({"profile": "original"})).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    // Nor is a malformed body accepted.
+    for body in [
+        json!("original"),
+        json!({"profile": 5}),
+        json!({"measured_kbps": -1}),
+    ] {
+        let reply = put_settings(&app, "tablet", body).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    }
+    // Nothing was stored.
+    let stored: Value = get(&app, &settings_uri("tablet")).send().await.json();
+    assert_eq!(stored["profile"], "original");
+}
+
+#[tokio::test]
+async fn a_profile_this_server_cannot_serve_is_still_stored() {
+    // Transcoding is off in this app, but the ladder is still the
+    // built-in one, so `720p` is a known profile: it plays the original
+    // until the server can do better.
+    let env = TestEnv::new();
+    let app = env.app().await;
+    assert!(!app.transcode_enabled());
+    let reply = put_settings(&app, "tablet", json!({"profile": "720p"})).await;
+    assert_eq!(reply.status, StatusCode::OK);
+}

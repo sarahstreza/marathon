@@ -643,6 +643,88 @@
         }
       }
     },
+    "/api/v1/clients/{id}/playback": {
+      "get": {
+        "tags": [
+          "playback"
+        ],
+        "description": "What the server knows of a client's playback settings (PLAN.md M13): its capabilities, chosen profile and measured bandwidth. A client that has stored none gets the defaults, which play the original files.",
+        "operationId": "get_playback_settings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The client's ID (its `X-Marathon-Client`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackSettings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "playback"
+        ],
+        "description": "Stores a client's playback settings, replacing any it had. From then on `now`, `advance` and `previous` called with this client's `X-Marathon-Client` give streams at the chosen quality. `profile` is `original`, `auto`, or an ID from `POST /playback/profiles`.",
+        "operationId": "put_playback_settings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The client's ID (its `X-Marathon-Client`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings as stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not valid settings, an unknown profile, or a reserved client ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events": {
       "get": {
         "tags": [
@@ -2259,6 +2341,29 @@
             "format": "int64",
             "description": "How far ahead of now the item would start, if the channel plays\nwithout interruption from its saved position. Items whose\nduration is unknown count as [`PLAN_UNKNOWN_DURATION_MS`].",
             "minimum": 0
+          }
+        }
+      },
+      "PlaybackSettings": {
+        "type": "object",
+        "description": "A client's playback settings: what `GET` and `PUT\n/clients/{id}/playback` carry. The server uses them to decide, for each\nitem, between the original file and a transcode.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities",
+            "description": "What the client can play."
+          },
+          "measured_kbps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The client's last measured throughput, in kbit/s, for `auto`.",
+            "minimum": 0
+          },
+          "profile": {
+            "type": "string",
+            "description": "The quality the client chose: [`PROFILE_ORIGINAL`] (the default),\n[`PROFILE_AUTO`], or the ID of a transcoding profile from `POST\n/playback/profiles`."
           }
         }
       },

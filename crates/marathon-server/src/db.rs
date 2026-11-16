@@ -422,6 +422,52 @@ impl Db {
             .map(|_| ())
     }
 
+    // --- Client playback settings ------------------------------------------
+
+    /// A client's stored playback settings (PLAN.md M13): its capabilities
+    /// JSON, its profile, and its measured bandwidth, if it has stored any.
+    pub async fn client_playback(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<(String, String, Option<i64>)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT capabilities_json, profile, measured_kbps
+             FROM client_playback WHERE client_id = ?",
+        )
+        .bind(client_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Stores (replacing) a client's playback settings.
+    pub async fn set_client_playback(
+        &self,
+        client_id: &str,
+        capabilities_json: &str,
+        profile: &str,
+        measured_kbps: Option<i64>,
+        updated_at: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO client_playback
+                 (client_id, capabilities_json, profile, measured_kbps, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(client_id) DO UPDATE SET
+                 capabilities_json = excluded.capabilities_json,
+                 profile = excluded.profile,
+                 measured_kbps = excluded.measured_kbps,
+                 updated_at = excluded.updated_at",
+        )
+        .bind(client_id)
+        .bind(capabilities_json)
+        .bind(profile)
+        .bind(measured_kbps)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
     // --- Channel membership -----------------------------------------------
 
     /// Replaces the whole `channel_items` table with `members`: (channel
@@ -577,6 +623,7 @@ mod tests {
                 "channel_items",
                 "channel_state",
                 "channels",
+                "client_playback",
                 "events",
                 "items",
                 "sources"

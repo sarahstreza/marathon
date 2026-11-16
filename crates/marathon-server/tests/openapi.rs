@@ -33,6 +33,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/clients"),
     ("get", "/api/v1/clients/connect"),
     ("post", "/api/v1/clients/{id}/actions"),
+    ("get", "/api/v1/clients/{id}/playback"),
+    ("put", "/api/v1/clients/{id}/playback"),
     ("get", "/api/v1/events"),
     ("get", "/api/v1/openapi.json"),
 ];

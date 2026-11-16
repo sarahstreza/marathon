@@ -55,6 +55,39 @@ pub struct Capabilities {
     pub screen_height: Option<u32>,
 }
 
+fn original() -> String {
+    PROFILE_ORIGINAL.to_owned()
+}
+
+/// A client's playback settings: what `GET` and `PUT
+/// /clients/{id}/playback` carry. The server uses them to decide, for each
+/// item, between the original file and a transcode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PlaybackSettings {
+    /// What the client can play.
+    #[serde(default)]
+    pub capabilities: Capabilities,
+    /// The quality the client chose: [`PROFILE_ORIGINAL`] (the default),
+    /// [`PROFILE_AUTO`], or the ID of a transcoding profile from `POST
+    /// /playback/profiles`.
+    #[serde(default = "original")]
+    pub profile: String,
+    /// The client's last measured throughput, in kbit/s, for `auto`.
+    #[serde(default)]
+    pub measured_kbps: Option<u32>,
+}
+
+impl Default for PlaybackSettings {
+    /// A client that has said nothing: it plays the original files.
+    fn default() -> Self {
+        Self {
+            capabilities: Capabilities::default(),
+            profile: original(),
+            measured_kbps: None,
+        }
+    }
+}
+
 /// `POST /playback/profiles`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ProfilesRequest {

@@ -22,8 +22,9 @@ use marathon_api::{
     API_PREFIX, API_VERSION, Action, ActionAccepted, AdvanceReason, AdvanceRequest,
     CLIENT_ID_HEADER, Capabilities, ChannelRef, ChannelSummary, ClientInfo, ClientPlaying,
     DEFAULT_CLIENT, Direction, ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item,
-    NextItem, Now, PlannedItem, PreviousRequest, ProfileKind, ProfileOption, ProfilesRequest,
-    ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo, VideoCodecSupport,
+    NextItem, Now, PlannedItem, PlaybackSettings, PreviousRequest, ProfileKind, ProfileOption,
+    ProfilesRequest, ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo,
+    VideoCodecSupport,
 };
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
@@ -74,6 +75,10 @@ pub fn router(app: App) -> Router {
         .route("/clients", get(list_clients))
         .route("/clients/connect", get(connect))
         .route("/clients/{id}/actions", post(client_action))
+        .route(
+            "/clients/{id}/playback",
+            get(get_playback_settings).put(put_playback_settings),
+        )
         .route("/events", get(events))
         .route("/openapi.json", get(openapi));
     Router::new()
@@ -511,6 +516,40 @@ async fn bandwidth(
         .into_response())
 }
 
+#[utoipa::path(get, path = "/api/v1/clients/{id}/playback", tag = "playback",
+    description = "What the server knows of a client's playback settings (PLAN.md M13): its \
+                   capabilities, chosen profile and measured bandwidth. A client that has \
+                   stored none gets the defaults, which play the original files.",
+    params(("id" = String, Path, description = "The client's ID (its `X-Marathon-Client`)")),
+    responses((status = 200, description = "The settings", body = PlaybackSettings)))]
+async fn get_playback_settings(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> Result<Json<PlaybackSettings>, ApiError> {
+    Ok(Json(app.playback_settings(&id).await?))
+}
+
+#[utoipa::path(put, path = "/api/v1/clients/{id}/playback", tag = "playback",
+    description = "Stores a client's playback settings, replacing any it had. From then on \
+                   `now`, `advance` and `previous` called with this client's \
+                   `X-Marathon-Client` give streams at the chosen quality. `profile` is \
+                   `original`, `auto`, or an ID from `POST /playback/profiles`.",
+    params(("id" = String, Path, description = "The client's ID (its `X-Marathon-Client`)")),
+    request_body = PlaybackSettings,
+    responses(
+        (status = 200, description = "The settings as stored", body = PlaybackSettings),
+        (status = 400, description = "Not valid settings, an unknown profile, or a reserved \
+            client ID", body = ErrorBody),
+    ))]
+async fn put_playback_settings(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    body: Result<Json<PlaybackSettings>, JsonRejection>,
+) -> Result<Json<PlaybackSettings>, ApiError> {
+    let Json(settings) = body.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    Ok(Json(app.set_playback_settings(&id, settings).await?))
+}
+
 #[utoipa::path(post, path = "/api/v1/playback/profiles", tag = "playback",
     description = "The quality profiles this client can choose from, given what it can play \
                    and (optionally) how fast its link measured (PLAN.md M13). `original` is \
@@ -855,14 +894,15 @@ pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     paths(
         health, version, list_channels, now, progress, advance, previous, plan, item, stream,
         audio, subtitle, bandwidth, transcode_playlist, transcode_segment, playback_profiles,
-        history, rescan, list_clients, connect, client_action, events, openapi,
+        get_playback_settings, put_playback_settings, history, rescan, list_clients, connect,
+        client_action, events, openapi,
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, ChannelRef, Now, NextItem, PlannedItem, Item, Subtitle, ProgressReport,
         AdvanceRequest, AdvanceReason, PreviousRequest, HistoryEntry, EventKind, ScanReport, ErrorBody,
         ErrorCode, Action, Direction, Event, RelayedEvent, ClientInfo, ClientPlaying,
         ActionAccepted, Capabilities, VideoCodecSupport, ProfilesRequest, ProfileKind,
-        ProfileOption,
+        ProfileOption, PlaybackSettings,
     )),
     modifiers(&BearerAuth),
     security((), ("bearer" = [])),

@@ -21,6 +21,7 @@ mod app;
 mod audio;
 mod bandwidth;
 pub mod catalog;
+mod client_playback;
 pub mod config;
 pub mod db;
 pub mod embedded;
