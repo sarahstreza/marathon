@@ -11,7 +11,7 @@
 // commit, which removes this allow.
 #![allow(dead_code)]
 
-use marathon_api::{Capabilities, PROFILE_AUTO, PROFILE_ORIGINAL};
+use marathon_api::{Capabilities, PROFILE_AUTO, PROFILE_ORIGINAL, ProfileKind, ProfileOption};
 
 use crate::config::TranscodeConfig;
 use crate::media::MediaInfo;
@@ -85,6 +85,62 @@ pub(crate) fn ladder(config: &TranscodeConfig) -> Vec<Rung> {
     // Best first: by bitrate, then height (the order is what `auto` walks).
     rungs.sort_by_key(|r| std::cmp::Reverse((r.video_kbps, r.height)));
     rungs
+}
+
+/// The bandwidth to plan with: `headroom_percent` of what was measured,
+/// so a stream does not use the whole link.
+pub(crate) fn budget_kbps(measured_kbps: u32, headroom_percent: u32) -> u32 {
+    let kbps = u64::from(measured_kbps) * u64::from(headroom_percent) / 100;
+    u32::try_from(kbps).unwrap_or(u32::MAX)
+}
+
+/// The profiles a client may choose from, for `POST /playback/profiles`.
+///
+/// `original` is always there. With transcoding available and a client
+/// that plays HLS (which transcoded streams are), `auto` and the ladder
+/// follow. `auto` is recommended once the client has measured its link;
+/// before that, `original`, which is the behaviour a client gets when it
+/// has chosen nothing.
+pub(crate) fn options(
+    caps: &Capabilities,
+    measured_kbps: Option<u32>,
+    ladder: &[Rung],
+    headroom_percent: u32,
+    transcoding: bool,
+) -> Vec<ProfileOption> {
+    let offers_transcodes = transcoding && caps.hls;
+    let budget = measured_kbps.map(|m| budget_kbps(m, headroom_percent));
+    let recommend_auto = offers_transcodes && measured_kbps.is_some();
+    let mut options = vec![ProfileOption {
+        id: PROFILE_ORIGINAL.to_owned(),
+        name: "Original".to_owned(),
+        kind: ProfileKind::Original,
+        video_kbps: None,
+        max_height: None,
+        fits_bandwidth: true,
+        recommended: !recommend_auto,
+    }];
+    if offers_transcodes {
+        options.push(ProfileOption {
+            id: PROFILE_AUTO.to_owned(),
+            name: "Auto".to_owned(),
+            kind: ProfileKind::Auto,
+            video_kbps: None,
+            max_height: None,
+            fits_bandwidth: true,
+            recommended: recommend_auto,
+        });
+        options.extend(ladder.iter().map(|rung| ProfileOption {
+            id: rung.id.clone(),
+            name: rung.name.clone(),
+            kind: ProfileKind::Transcode,
+            video_kbps: Some(rung.video_kbps),
+            max_height: Some(rung.height),
+            fits_bandwidth: budget.is_none_or(|b| rung.total_kbps() <= b),
+            recommended: false,
+        }));
+    }
+    options
 }
 
 /// What a client asked for.
@@ -481,6 +537,72 @@ mod tests {
             },
         ];
         assert_eq!(pick(&two, &broad(), "auto", None), Decision::Direct);
+    }
+
+    fn ids(options: &[ProfileOption]) -> Vec<&str> {
+        options.iter().map(|o| o.id.as_str()).collect()
+    }
+
+    fn recommended(options: &[ProfileOption]) -> Vec<&str> {
+        options
+            .iter()
+            .filter(|o| o.recommended)
+            .map(|o| o.id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn options_list_original_auto_and_the_ladder() {
+        let all = options(&broad(), Some(6_000), &ladder(), 60, true);
+        assert_eq!(
+            ids(&all),
+            [
+                "original", "auto", "1080p", "720p", "720p-low", "480p", "360p"
+            ]
+        );
+        // 60% of 6 Mbit/s is 3.6: 720p (4.1) is too much, 720p-low (2.1) fits.
+        let fits: Vec<_> = all
+            .iter()
+            .map(|o| (o.id.as_str(), o.fits_bandwidth))
+            .collect();
+        assert_eq!(
+            fits,
+            [
+                ("original", true),
+                ("auto", true),
+                ("1080p", false),
+                ("720p", false),
+                ("720p-low", true),
+                ("480p", true),
+                ("360p", true)
+            ]
+        );
+        assert_eq!(recommended(&all), ["auto"]);
+    }
+
+    #[test]
+    fn without_a_measurement_original_is_recommended_and_everything_fits() {
+        let all = options(&broad(), None, &ladder(), 60, true);
+        assert!(all.iter().all(|o| o.fits_bandwidth));
+        assert_eq!(recommended(&all), ["original"]);
+    }
+
+    #[test]
+    fn only_original_when_there_is_no_transcoding_or_no_hls() {
+        let off = options(&broad(), Some(6_000), &ladder(), 60, false);
+        assert_eq!(ids(&off), ["original"]);
+        assert_eq!(recommended(&off), ["original"]);
+        let mut no_hls = broad();
+        no_hls.hls = false;
+        let on = options(&no_hls, Some(6_000), &ladder(), 60, true);
+        assert_eq!(ids(&on), ["original"]);
+    }
+
+    #[test]
+    fn headroom_scales_the_measurement() {
+        assert_eq!(budget_kbps(10_000, 60), 6_000);
+        assert_eq!(budget_kbps(u32::MAX, 100), u32::MAX);
+        assert_eq!(budget_kbps(0, 60), 0);
     }
 
     #[test]

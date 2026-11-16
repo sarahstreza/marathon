@@ -131,9 +131,24 @@ impl TestEnv {
         audio: &str,
         channels: &str,
     ) -> String {
+        self.config_toml_full(server_extra, audio, "enabled = false", channels)
+    }
+
+    /// Like [`TestEnv::config_toml`], with the given `[audio]` and
+    /// `[transcode]` table bodies. Transcoding is off unless a test turns
+    /// it on, so results don't depend on which encoders the machine has
+    /// (and `App::open` doesn't spend a second testing them).
+    pub fn config_toml_full(
+        &self,
+        server_extra: &str,
+        audio: &str,
+        transcode: &str,
+        channels: &str,
+    ) -> String {
         format!(
             "[server]\nbind = \"127.0.0.1:0\"\ndata_dir = {data:?}\n{server_extra}\n\
              [audio]\n{audio}\n\
+             [transcode]\n{transcode}\n\
              [[source]]\nid = \"lib\"\nkind = \"filesystem\"\nroot = {root:?}\n{channels}",
             data = self.data_dir().display().to_string(),
             root = self.library().display().to_string(),

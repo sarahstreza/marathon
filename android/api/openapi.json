@@ -89,6 +89,46 @@
         }
       }
     },
+    "/api/v1/bandwidth": {
+      "get": {
+        "tags": [
+          "playback"
+        ],
+        "description": "`bytes` bytes of noise that cannot be compressed or cached, for a client to time (PLAN.md M13). Divide the size by the time the download took to get the throughput in bit/s, and report it as `measured_kbps`. At most 64 MiB per request.",
+        "operationId": "bandwidth",
+        "parameters": [
+          {
+            "name": "bytes",
+            "in": "query",
+            "description": "How many bytes to send, 1 to 67108864",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The bytes",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Missing or out-of-range `bytes`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/channels": {
       "get": {
         "tags": [
@@ -768,6 +808,50 @@
         }
       }
     },
+    "/api/v1/playback/profiles": {
+      "post": {
+        "tags": [
+          "playback"
+        ],
+        "description": "The quality profiles this client can choose from, given what it can play and (optionally) how fast its link measured (PLAN.md M13). `original` is always offered; `auto` and the transcoding rungs only when the server can transcode and the client plays HLS. Exactly one option is `recommended`.",
+        "operationId": "playback_profiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The options: original, then auto, then the ladder from best to worst",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileOption"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stream/{item_id}": {
       "get": {
         "tags": [
@@ -1254,6 +1338,52 @@
           },
           "reason": {
             "$ref": "#/components/schemas/AdvanceReason"
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "description": "What a client can play. Sent with `PUT /clients/{id}/playback` and\n`POST /playback/profiles`.",
+        "properties": {
+          "audio_codecs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Audio codecs the client decodes. Empty means none."
+          },
+          "containers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Container formats the client opens, by ffprobe's first name\n(`matroska`, `mov`). Empty means any."
+          },
+          "hls": {
+            "type": "boolean",
+            "description": "Whether the client plays HLS (needed for transcoded streams)."
+          },
+          "max_audio_channels": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most audio channels the client plays without downmixing. `0`\nmeans no limit.",
+            "minimum": 0
+          },
+          "screen_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The height of the client's screen, in pixels, if it knows: the\nserver never sends more picture than this.",
+            "minimum": 0
+          },
+          "video": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoCodecSupport"
+            },
+            "description": "Video codecs the client decodes. Empty means none: every video would\nbe transcoded."
           }
         }
       },
@@ -1973,6 +2103,86 @@
           }
         }
       },
+      "ProfileKind": {
+        "type": "string",
+        "description": "What kind of stream a profile gives.",
+        "enum": [
+          "original",
+          "auto",
+          "transcode"
+        ]
+      },
+      "ProfileOption": {
+        "type": "object",
+        "description": "A quality a client may choose, from `POST /playback/profiles`.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "fits_bandwidth",
+          "recommended"
+        ],
+        "properties": {
+          "fits_bandwidth": {
+            "type": "boolean",
+            "description": "Whether the client's measured bandwidth (if it gave one) is enough\nfor this profile with headroom. Always true without a measurement."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID to use as the client's profile, e.g. `720p`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProfileKind"
+          },
+          "max_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Tallest picture, in pixels. `None` for `original` and `auto`.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "A name to show, e.g. `720p · 4 Mbps`."
+          },
+          "recommended": {
+            "type": "boolean",
+            "description": "The one the server suggests: `auto` when there is a measurement,\nelse `original`."
+          },
+          "video_kbps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Target video bitrate, in kbit/s. `None` for `original` and `auto`.",
+            "minimum": 0
+          }
+        }
+      },
+      "ProfilesRequest": {
+        "type": "object",
+        "description": "`POST /playback/profiles`.",
+        "required": [
+          "capabilities"
+        ],
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "measured_kbps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The client's measured throughput from `GET /bandwidth`, in kbit/s.",
+            "minimum": 0
+          }
+        }
+      },
       "ProgressReport": {
         "type": "object",
         "description": "`POST /channels/{id}/progress`.",
@@ -2143,6 +2353,30 @@
           "server_version": {
             "type": "string",
             "description": "Version of the server software."
+          }
+        }
+      },
+      "VideoCodecSupport": {
+        "type": "object",
+        "description": "One video codec a client can decode, and how well.",
+        "required": [
+          "codec",
+          "max_height"
+        ],
+        "properties": {
+          "codec": {
+            "type": "string",
+            "description": "ffprobe's codec name, e.g. `h264`."
+          },
+          "max_height": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The tallest picture the client decodes in this codec, in pixels.",
+            "minimum": 0
+          },
+          "ten_bit": {
+            "type": "boolean",
+            "description": "Whether it decodes 10-bit video in this codec."
           }
         }
       }

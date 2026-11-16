@@ -20,9 +20,10 @@ use axum::{Json, Router};
 use futures_util::Stream;
 use marathon_api::{
     API_PREFIX, API_VERSION, Action, ActionAccepted, AdvanceReason, AdvanceRequest,
-    CLIENT_ID_HEADER, ChannelRef, ChannelSummary, ClientInfo, ClientPlaying, DEFAULT_CLIENT,
-    Direction, ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item, NextItem, Now,
-    PlannedItem, PreviousRequest, ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo,
+    CLIENT_ID_HEADER, Capabilities, ChannelRef, ChannelSummary, ClientInfo, ClientPlaying,
+    DEFAULT_CLIENT, Direction, ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item,
+    NextItem, Now, PlannedItem, PreviousRequest, ProfileKind, ProfileOption, ProfilesRequest,
+    ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo, VideoCodecSupport,
 };
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
@@ -58,6 +59,8 @@ pub fn router(app: App) -> Router {
         .route("/stream/{item_id}", get(stream))
         .route("/audio/{item_id}", get(audio))
         .route("/subtitles/{item_id}/{n}", get(subtitle))
+        .route("/bandwidth", get(bandwidth))
+        .route("/playback/profiles", post(playback_profiles))
         .route("/history", get(history))
         .route("/library/rescan", post(rescan))
         .route("/clients", get(list_clients))
@@ -394,6 +397,72 @@ async fn audio(
     audio.stream(input, params.start_ms).await
 }
 
+#[derive(Debug, Deserialize)]
+struct BandwidthParams {
+    bytes: u64,
+}
+
+#[utoipa::path(get, path = "/api/v1/bandwidth", tag = "playback",
+    description = "`bytes` bytes of noise that cannot be compressed or cached, for a client \
+                   to time (PLAN.md M13). Divide the size by the time the download took to \
+                   get the throughput in bit/s, and report it as `measured_kbps`. \
+                   At most 64 MiB per request.",
+    params(("bytes" = u64, Query, description = "How many bytes to send, 1 to 67108864")),
+    responses(
+        (status = 200, description = "The bytes", content_type = "application/octet-stream"),
+        (status = 400, description = "Missing or out-of-range `bytes`", body = ErrorBody),
+    ))]
+async fn bandwidth(
+    query: Result<Query<BandwidthParams>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    if !(1..=crate::bandwidth::MAX_BYTES).contains(&params.bytes) {
+        return Err(ApiError::BadRequest(format!(
+            "bytes must be from 1 to {}",
+            crate::bandwidth::MAX_BYTES
+        )));
+    }
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::CONTENT_LENGTH, HeaderValue::from(params.bytes)),
+        ],
+        crate::bandwidth::body(params.bytes),
+    )
+        .into_response())
+}
+
+#[utoipa::path(post, path = "/api/v1/playback/profiles", tag = "playback",
+    description = "The quality profiles this client can choose from, given what it can play \
+                   and (optionally) how fast its link measured (PLAN.md M13). `original` is \
+                   always offered; `auto` and the transcoding rungs only when the server can \
+                   transcode and the client plays HLS. Exactly one option is `recommended`.",
+    request_body = ProfilesRequest,
+    responses(
+        (status = 200, description = "The options: original, then auto, then the ladder \
+            from best to worst", body = Vec<ProfileOption>),
+        (status = 400, description = "Not a valid request", body = ErrorBody),
+    ))]
+async fn playback_profiles(
+    State(app): State<App>,
+    body: Result<Json<ProfilesRequest>, JsonRejection>,
+) -> Result<Json<Vec<ProfileOption>>, ApiError> {
+    let Json(request) = body.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let transcode = app.inner.transcode.as_ref();
+    let config = transcode.map(|t| t.config.clone()).unwrap_or_default();
+    Ok(Json(crate::profiles::options(
+        &request.capabilities,
+        request.measured_kbps,
+        &crate::profiles::ladder(&config),
+        config.auto_headroom_percent,
+        transcode.is_some(),
+    )))
+}
+
 #[utoipa::path(get, path = "/api/v1/subtitles/{item_id}/{n}", tag = "library",
     params(
         ("item_id" = String, Path, description = "Item ID"),
@@ -710,13 +779,14 @@ pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     ),
     paths(
         health, version, list_channels, now, progress, advance, previous, plan, item, stream,
-        audio, subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
+        audio, subtitle, bandwidth, playback_profiles, history, rescan, list_clients, connect, client_action, events, openapi,
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, ChannelRef, Now, NextItem, PlannedItem, Item, Subtitle, ProgressReport,
         AdvanceRequest, AdvanceReason, PreviousRequest, HistoryEntry, EventKind, ScanReport, ErrorBody,
         ErrorCode, Action, Direction, Event, RelayedEvent, ClientInfo, ClientPlaying,
-        ActionAccepted,
+        ActionAccepted, Capabilities, VideoCodecSupport, ProfilesRequest, ProfileKind,
+        ProfileOption,
     )),
     modifiers(&BearerAuth),
     security((), ("bearer" = [])),
