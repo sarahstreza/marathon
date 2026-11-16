@@ -57,6 +57,7 @@ pub fn router(app: App) -> Router {
         .route("/items/{id}", get(item))
         .route("/stream/{item_id}", get(stream))
         .route("/audio/{item_id}", get(audio))
+        .route("/thumbnail/{item_id}", get(thumbnail))
         .route("/subtitles/{item_id}/{n}", get(subtitle))
         .route("/history", get(history))
         .route("/library/rescan", post(rescan))
@@ -375,7 +376,13 @@ async fn audio(
                 .to_owned(),
         ));
     };
-    let input = match media(&app, &item_id).await? {
+    let input = ffmpeg_input(&app, &item_id).await?;
+    audio.stream(input, params.start_ms).await
+}
+
+/// Where ffmpeg reads `item_id` from, for audio streams and thumbnails.
+async fn ffmpeg_input(app: &App, item_id: &str) -> Result<Input, ApiError> {
+    Ok(match media(app, item_id).await? {
         Media::File(file) => {
             // ffmpeg would fail too, but as a 502; a vanished file is a 404,
             // as it is for `/stream`.
@@ -390,8 +397,58 @@ async fn audio(
             let (url, headers) = client.ffmpeg_input(&id);
             Input::Http { url, headers }
         }
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct ThumbnailParams {
+    #[serde(default)]
+    at_ms: u64,
+    width: Option<u32>,
+}
+
+#[utoipa::path(get, path = "/api/v1/thumbnail/{item_id}", tag = "library",
+    description = "One frame of the item as a JPEG, made by ffmpeg on request, for clients \
+                   that aren't showing the video (audio-only mode, a car's screen). Offered \
+                   exactly when audio streams are: when `now` gives an `audio_url`.",
+    params(
+        ("item_id" = String, Path, description = "Item ID"),
+        ("at_ms" = Option<u64>, Query, description = "The frame's time, in milliseconds \
+            (default 0)"),
+        ("width" = Option<u32>, Query, description = "Width in pixels, 32 to 1280 (default \
+            480); the height follows the video's aspect ratio"),
+    ),
+    responses(
+        (status = 200, description = "The frame", content_type = "image/jpeg"),
+        (status = 400, description = "Malformed query, or a width out of range", body = ErrorBody),
+        (status = 404, description = "No such item, or its file is missing", body = ErrorBody),
+        (status = 502, description = "ffmpeg made no picture (the item has no video, `at_ms` \
+            is past its end, or its source failed)", body = ErrorBody),
+        (status = 503, description = "The server has no ffmpeg, or is busy making other \
+            thumbnails", body = ErrorBody),
+    ))]
+async fn thumbnail(
+    State(app): State<App>,
+    Path(item_id): Path<String>,
+    query: Result<Query<ThumbnailParams>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    use crate::thumbnail::{DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH};
+    let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let width = params.width.unwrap_or(DEFAULT_WIDTH);
+    if !(MIN_WIDTH..=MAX_WIDTH).contains(&width) {
+        return Err(ApiError::BadRequest(format!(
+            "width {width} is out of range ({MIN_WIDTH} to {MAX_WIDTH})"
+        )));
+    }
+    let Some(audio) = &app.inner.audio else {
+        return Err(ApiError::Unavailable(
+            "this server makes no thumbnails: it needs ffmpeg with libopus, and \
+             audio.enabled not set to false"
+                .to_owned(),
+        ));
     };
-    audio.stream(input, params.start_ms).await
+    let input = ffmpeg_input(&app, &item_id).await?;
+    audio.thumbnail(input, params.at_ms, width).await
 }
 
 #[utoipa::path(get, path = "/api/v1/subtitles/{item_id}/{n}", tag = "library",
@@ -710,7 +767,7 @@ pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     ),
     paths(
         health, version, list_channels, now, progress, advance, previous, plan, item, stream,
-        audio, subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
+        audio, thumbnail, subtitle, history, rescan, list_clients, connect, client_action, events, openapi,
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, ChannelRef, Now, NextItem, PlannedItem, Item, Subtitle, ProgressReport,

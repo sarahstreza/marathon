@@ -1,6 +1,7 @@
 //! Integration tests for audio-only mode (PLAN.md M12): probing durations
-//! with ffprobe, and `GET /audio/{item_id}`. These need real media, so they make tiny clips with
-//! ffmpeg, and skip (passing, with a note on stderr) where ffmpeg or
+//! with ffprobe, `GET /audio/{item_id}`, and `GET /thumbnail/{item_id}`
+//! (which shares audio's ffmpeg). These need real media, so they make tiny
+//! clips with ffmpeg, and skip (passing, with a note on stderr) where ffmpeg or
 //! ffprobe is not installed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -409,4 +410,91 @@ async fn now_offers_audio_urls_exactly_when_audio_is_on() {
     let tuned = now(&off, "show").await;
     assert_eq!(tuned["audio_url"], serde_json::Value::Null);
     assert_eq!(tuned["next"]["audio_url"], serde_json::Value::Null);
+}
+
+// --- GET /thumbnail/{item_id} -------------------------------------------------
+
+/// A JPEG's width and height, from its first SOF marker.
+fn jpeg_size(bytes: &[u8]) -> (u32, u32) {
+    assert!(bytes.starts_with(&[0xFF, 0xD8]), "not a JPEG");
+    let mut i = 2;
+    while i + 9 < bytes.len() {
+        assert_eq!(bytes[i], 0xFF, "bad JPEG marker at {i}");
+        let marker = bytes[i + 1];
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        if (0xC0..=0xC3).contains(&marker) {
+            let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]);
+            let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]);
+            return (u32::from(w), u32::from(h));
+        }
+        i += 2 + len;
+    }
+    panic!("no SOF marker in the JPEG");
+}
+
+#[tokio::test]
+async fn thumbnails_are_jpegs_of_the_asked_width() {
+    if !have("ffmpeg") {
+        return;
+    }
+    let env = TestEnv::new();
+    write_clip(&env, CLIP, 3);
+    let app = app_with_audio(&env, "").await;
+    let id = clip_id(&app).await;
+
+    let reply = common::get(&app, &format!("/api/v1/thumbnail/{id}?at_ms=1500"))
+        .send()
+        .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    assert_eq!(reply.header("content-type"), Some("image/jpeg"));
+    // The clip is 32x24 (4:3): 480 wide by default.
+    assert_eq!(jpeg_size(&reply.body), (480, 360));
+
+    let reply = common::get(&app, &format!("/api/v1/thumbnail/{id}?width=64"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(jpeg_size(&reply.body), (64, 48));
+}
+
+#[tokio::test]
+async fn thumbnail_errors() {
+    if !have("ffmpeg") {
+        return;
+    }
+    let env = TestEnv::new();
+    write_clip(&env, CLIP, 3);
+    let app = app_with_audio(&env, "").await;
+    let id = clip_id(&app).await;
+
+    let reply = common::get(&app, "/api/v1/thumbnail/no-such-item")
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+
+    for query in ["width=4000", "width=1", "at_ms=soon"] {
+        let reply = common::get(&app, &format!("/api/v1/thumbnail/{id}?{query}"))
+            .send()
+            .await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{query}");
+    }
+
+    // Past the end there is no frame.
+    let reply = common::get(&app, &format!("/api/v1/thumbnail/{id}?at_ms=60000"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(reply.error_code(), "upstream");
+
+    let off = env.app().await;
+    let reply = common::get(&off, &format!("/api/v1/thumbnail/{id}"))
+        .send()
+        .await;
+    assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(reply.error_code(), "unavailable");
 }
