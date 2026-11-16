@@ -31,6 +31,7 @@ mod media;
 mod nested;
 pub mod parse;
 mod playback;
+mod profiles;
 pub mod relay;
 pub mod scan;
 pub mod sources;

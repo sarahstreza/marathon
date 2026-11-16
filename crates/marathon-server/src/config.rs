@@ -432,6 +432,27 @@ pub struct TranscodeConfig {
     /// The share of a client's measured bandwidth the `auto` profile
     /// plans to use, in percent.
     pub auto_headroom_percent: u32,
+    /// The quality ladder, replacing the built-in one when not empty
+    /// (`[[transcode.profile]]`). `original`, `auto` and `audio` are always
+    /// offered whatever this says.
+    pub profile: Vec<ProfileConfig>,
+}
+
+/// One rung of the quality ladder: `[[transcode.profile]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileConfig {
+    /// The profile's ID, used in URLs and by clients: lowercase letters,
+    /// digits, `-` and `_`.
+    pub id: String,
+    /// What to show for it. Defaults to the height and bitrate.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The tallest picture, in pixels. Sources shorter than this are never
+    /// scaled up.
+    pub height: u32,
+    /// Target video bitrate, in kbit/s.
+    pub video_kbps: u32,
 }
 
 impl Default for TranscodeConfig {
@@ -446,6 +467,7 @@ impl Default for TranscodeConfig {
             segment_seconds: 6,
             idle_timeout_s: 120,
             auto_headroom_percent: 60,
+            profile: Vec::new(),
         }
     }
 }
@@ -467,6 +489,39 @@ impl TranscodeConfig {
         }
         if !(10..=100).contains(&self.auto_headroom_percent) {
             return invalid("transcode.auto_headroom_percent must be from 10 to 100");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for profile in &self.profile {
+            let id = &profile.id;
+            let well_formed = !id.is_empty()
+                && id.bytes().all(|b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
+                });
+            if !well_formed {
+                return Err(ConfigError::Invalid(format!(
+                    "transcode.profile id {id:?} must be lowercase letters, digits, - and _"
+                )));
+            }
+            if ["original", "auto", "audio"].contains(&id.as_str()) {
+                return Err(ConfigError::Invalid(format!(
+                    "transcode.profile id {id:?} is built in and cannot be redefined"
+                )));
+            }
+            if !seen.insert(id) {
+                return Err(ConfigError::Invalid(format!(
+                    "transcode.profile id {id:?} appears twice"
+                )));
+            }
+            if !(120..=4320).contains(&profile.height) {
+                return Err(ConfigError::Invalid(format!(
+                    "transcode.profile {id:?}: height must be from 120 to 4320"
+                )));
+            }
+            if profile.video_kbps < 50 {
+                return Err(ConfigError::Invalid(format!(
+                    "transcode.profile {id:?}: video_kbps must be at least 50"
+                )));
+            }
         }
         Ok(())
     }
@@ -1108,6 +1163,43 @@ max_sessions = 1"
                 Config::from_toml_str(&format!("{MINIMAL}\n[transcode]\n{bad}")).is_err(),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn transcode_profiles_replace_the_ladder_and_are_checked() {
+        let config = Config::from_toml_str(&format!(
+            "{MINIMAL}
+[transcode]
+[[transcode.profile]]
+id = \"tablet\"
+height = 800
+video_kbps = 1500"
+        ))
+        .unwrap();
+        config.validate().unwrap();
+        let profiles = config.transcode.unwrap().profile;
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "tablet");
+        assert_eq!(profiles[0].name, None);
+
+        let rung = |id: &str, height: u32, kbps: u32| {
+            format!("[[transcode.profile]]\nid = {id:?}\nheight = {height}\nvideo_kbps = {kbps}\n")
+        };
+        for (toml, expect) in [
+            (rung("Big", 720, 4000), "lowercase"),
+            (rung("", 720, 4000), "lowercase"),
+            (rung("auto", 720, 4000), "built in"),
+            (rung("original", 720, 4000), "built in"),
+            (rung("a", 10, 4000), "height"),
+            (rung("a", 720, 5), "video_kbps"),
+            (
+                format!("{}\n{}", rung("a", 720, 4000), rung("a", 480, 1000)),
+                "twice",
+            ),
+        ] {
+            let err = validate(&format!("{MINIMAL}\n{toml}")).unwrap_err();
+            assert!(err.contains(expect), "{expect}: {err}");
         }
     }
 
