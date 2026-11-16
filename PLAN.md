@@ -114,9 +114,10 @@ Get these right before anything else; every component depends on them.
   without any of this.
 - Durations come from the client (mpv reports them) or from catalog providers
   that know them (Jellyfin). The MVP does not run ffprobe on the server; from
-  M12 on, a server with audio streaming enabled probes a filesystem item's
-  duration once, when it first builds a `now` for it without one, because an
-  audio stream carries none.
+  M13 on, a server with transcoding enabled probes a filesystem item's media
+  (duration, codecs, streams) once, when it first builds a `now` for it,
+  because a transcoded stream's profile depends on it and an HLS playlist
+  needs the duration up front.
 
 ---
 
@@ -140,6 +141,7 @@ Get these right before anything else; every component depends on them.
 | Gamepad | `gilrs` | |
 | HDMI-CEC | libcec via a small C shim in `marathon-input-cec` (chosen over `cec-rs` in M7; see §12) | Covers Raspberry Pi, the Linux kernel CEC framework, and Pulse-Eight USB adapters. libcec is GPL-2.0-or-later, so `input-cec` builds are GPL |
 | Remote control / events | axum WebSocket + Server-Sent Events | Client control channel and event stream |
+| Transcoding | `ffmpeg` / `ffprobe` as external processes | Never linked, which keeps the server's licensing clean (M12 audio, M13 video) |
 | Testing | `proptest`, `tempfile`, `tokio::test` | |
 
 **Version alignment warning:** `egui-winit`/`egui_glow` pin specific `winit`
@@ -321,6 +323,7 @@ items         (id TEXT PK, source_id TEXT, path TEXT, size INTEGER, mtime INTEGE
                show TEXT, season INTEGER, episode INTEGER, title TEXT,
                duration_ms INTEGER NULL, subtitles_json TEXT,
                missing INTEGER DEFAULT 0, external_id TEXT NULL,
+               media_json TEXT NULL,  -- M13: one ffprobe result, cleared when size/mtime change
                UNIQUE(source_id, path))
                -- external_id: the source's own ID (Jellyfin's), for streaming
 channels      (id TEXT PK, number INTEGER, name TEXT, rule_json TEXT, selectors_json TEXT)
@@ -330,6 +333,8 @@ channel_items (channel_id TEXT, item_id TEXT, position INTEGER,
 channel_state (channel_id TEXT PK, item_id TEXT, position_ms INTEGER,
                cursor_json TEXT, updated_at INTEGER,
                children_json TEXT)  -- M11: an independent parent's states for its children
+client_playback (client_id TEXT PK, capabilities_json TEXT, profile TEXT,
+               measured_kbps INTEGER NULL, updated_at INTEGER)  -- M13
 events        (id TEXT PK, ts INTEGER, client_id TEXT, channel_id TEXT,
                item_id TEXT, kind TEXT, position_ms INTEGER,
                resolved_channel_id TEXT, resolution_path_json TEXT)  -- M11
@@ -366,7 +371,12 @@ via `http-header-fields`).
 | GET | `/channels/{id}/plan?items=&hours=` | M11: what the channel will play from its current item on, by stepping copies of its state (and its children's) exactly as playback would |
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
-| GET | `/audio/{item_id}?start_ms=` | M12: the item's audio only, transcoded to Opus in Ogg as it is sent, starting `start_ms` in. No `Range`; seek by requesting a new `start_ms`. `503 unavailable` when the server has no working ffmpeg |
+| GET | `/audio/{item_id}?start_ms=` | M12: the item's audio only, transcoded to Opus in Ogg as it is sent, starting `start_ms` in. No `Range`; seek by requesting a new `start_ms`. `503 unavailable` when the server has no working ffmpeg. **Removed in M13** (replaced by the `audio` profile below) |
+| GET | `/transcode/{item_id}/{profile}/index.m3u8` | M13: HLS VOD playlist for the whole item. `503` when transcoding is off, `404` for an unknown item or profile |
+| GET | `/transcode/{item_id}/{profile}/{n}.ts?s=` | M13: segment `n` of a session, encoding it (or restarting the encoder there) if needed |
+| GET | `/bandwidth?bytes=N` | M13: N incompressible bytes, `no-store`, for a client's throughput test |
+| POST | `/playback/profiles` | M13: `{capabilities, measured_kbps?}` → the profile options with a recommendation |
+| GET, PUT | `/clients/{id}/playback` | M13: a client's capabilities, chosen profile and measured bandwidth |
 | GET | `/subtitles/{item_id}/{n}` | Sidecar subtitle file |
 | GET | `/history?limit=` | Recent events, newest first |
 | POST | `/library/rescan` | Rescan all sources |
@@ -1074,6 +1084,208 @@ from passing `audio_url` through.
 - [manual] Turning audio-only off brings the video back at the current
   position.
 
+### M13 — Live transcoding
+
+Quality profiles for every client. A client says what it can decode, measures
+its link, and picks a profile; the server either streams the original file
+(as today) or transcodes it live. Audio-only mode (M12) moves onto the same
+pipeline. M14 reuses the pipeline for offline downloads, and a web/iPad client
+can use the HLS output unchanged.
+
+**Output: HLS with a full-timeline VOD playlist.**
+`GET /transcode/{item_id}/{profile}/index.m3u8` is generated without running
+ffmpeg: `#EXT-X-PLAYLIST-TYPE:VOD`, fixed 6 s segments covering the item's
+whole probed duration, then `#EXT-X-ENDLIST`. Segment URIs carry a session ID
+(`?s=`) minted with the playlist. `GET /transcode/{item_id}/{profile}/{n}.ts?s=`
+serves segment `n`: if the session's ffmpeg has written it, serve it; if it is
+about to be (within ~30 s of encoding), wait; otherwise restart ffmpeg at
+`n × 6 s` with `-start_number n` and keyframes forced every 6 s, so segment
+boundaries are identical across restarts.
+
+The player therefore sees the item's real timeline and duration. `start_ms`,
+positions, the finished threshold and `seek_relative` behave as with
+`/stream`, and neither the Tuner, the `Player` trait, nor progress reporting
+changes (§2, decision 3: the server owns the complexity). A session that
+expires while paused costs nothing: the next segment request starts a new
+encoder. Segments are MPEG-TS because M13 emits only H.264 + AAC and TS has no
+init segment to keep consistent across restarts (§12).
+
+Sessions: ffmpeg is throttled with its own `-readrate 1
+-readrate_initial_burst 60` (ffmpeg 6.1 or newer, checked at startup) rather
+than SIGSTOP. A session is killed after `idle_timeout_s` (default 120) with no
+requests, and segments more than 5 minutes behind the newest one requested are
+deleted. `data_dir/transcode/` is wiped at startup. At most `max_sessions`
+(default 3) run at once; when that is full, `now` falls back to the direct
+stream and adds a `warnings` entry instead of handing out a URL that would
+fail.
+
+**Media probing.** `items.media_json` (§7) holds one ffprobe result: container,
+duration, overall bitrate, the video stream (codec, profile, bit depth, size,
+fps, HDR transfer), audio tracks (codec, channels, language, default flag) and
+subtitle tracks (codec, language, text or image). It is probed lazily, when a
+`now` or `next` needs a decision (as M12 does for durations), cached, and
+cleared when a scan sees a new size or mtime. Jellyfin items are probed
+through the proxied stream URL. This replaces M12's duration-only probe, and
+durations come from it.
+
+**Encoders.** At startup, like M12's ffmpeg check, `[transcode] hardware =
+"auto"` tries each encoder with a one-second `lavfi` test encode, in this
+order: `h264_nvenc` (CUDA decode, `scale_cuda`), `h264_qsv`, `h264_vaapi`,
+`h264_videotoolbox`, `libx264`, `libopenh264`. The first that works is used and
+logged; `hardware` can also name one. HDR (PQ/HLG) sources going to 8-bit H.264
+are tone-mapped with the first of `tonemap_opencl`, `libplacebo`, or software
+`zscale`+`tonemap` that works; if none does, HDR items are transcoded
+unmapped and the server warns. Packaging: the Docker image needs the NVIDIA
+container toolkit for NVENC; Fedora's `ffmpeg-free` may lack NVENC (check
+`ffmpeg -encoders`; RPM Fusion's build has it); the Nix module takes an
+ffmpeg with NVENC.
+
+**Profiles.** The default ladder (overridable with `[[transcode.profile]]`) is
+`original`, `auto`, `1080p` (8 Mbit/s), `720p` (4), `720p-low` (2), `480p`
+(1), `360p` (0.5), and `audio` (AAC stereo, 128 kbit/s, which replaces M12's
+Opus). `original` is today's `/stream`.
+
+**Capabilities.** A client reports `{video: [{codec, max_height, ten_bit}],
+audio_codecs, containers, max_audio_channels, hls, screen_height}`. Desktop
+reports a broad list (libmpv decodes nearly anything). Android reads hardware
+decode limits from `MediaCodecList` and caps software decoding at 1080p.
+
+**Bandwidth test.** `GET /bandwidth?bytes=N` returns N incompressible bytes
+with `Cache-Control: no-store`. The client doubles N from 256 KiB until one
+transfer takes at least 1 s (capped at 32 MiB) and reports that throughput.
+The algorithm lives in `marathon-client` and in `:core`, tested with a fake
+clock and transport.
+
+**Per-client settings.** `PUT /clients/{id}/playback {capabilities, profile,
+measured_kbps}` and `GET` for the same, stored in `client_playback` (§7) so
+they survive restarts. `now`, `advance` and `previous` already know the
+caller's client ID, so the calls the Tuner makes do not change. A client with
+no stored settings gets `original`: M12 behaviour. `POST /playback/profiles
+{capabilities, measured_kbps?}` returns `[ProfileOption {id, name, kind,
+video_kbps, max_height, fits_bandwidth, recommended}]` for a picker; `auto`
+is recommended when there is a measurement.
+
+**Decision.** A pure function, `decide(media, caps, profile, budget) -> Direct
+| Transcode(rung)`, with table-driven tests:
+- `original` is always direct.
+- `auto` sets the budget to `measured × auto_headroom` (0.6). It is direct if
+  the item's codecs fit the client and its bitrate fits the budget; otherwise
+  it transcodes to the highest rung that fits the budget and is no taller than
+  the source or the screen.
+- A fixed rung is direct when the source is already compatible and smaller. It
+  never upscales.
+- If transcoding is unavailable, the item is direct and `warnings` says why.
+
+`now` and `next` gain `stream: StreamInfo {kind, profile, summary}`, e.g.
+"Transcoding · 720p · 4 Mbps", for the info overlay. `stream_url` points at
+`/stream` or the playlist.
+
+**Subtitles.** Sidecar subtitles are unchanged. When an item is transcoded,
+embedded text tracks are listed in `now.subtitles` as
+`/subtitles/{item}/embedded/{n}`, extracted to WebVTT on first request and
+cached in `data_dir`. Embedded image subtitles (PGS, VobSub) are not carried
+when transcoding (`docs/TODO.md`; burn-in comes later); Original keeps them.
+Audio is the default-flagged track, else the first, as stereo AAC.
+
+**Audio-only.** `audio_url` becomes `/transcode/{item}/audio/index.m3u8`: full
+timeline, AAC in TS. `GET /audio/{id}` and the piped path in `audio.rs` are
+removed. `[audio]` stays for one release as a deprecated alias (`enabled`,
+`ffmpeg`, `ffprobe` map to `[transcode]`, `bitrate_kbps` to the `audio`
+profile) and logs a warning. Android's audio mode drops `AudioStream.kt`'s
+offset and seek-by-reload arithmetic (the player now seeks and reports
+positions natively) and keeps the foreground service, MediaSession, and
+headphone pause.
+
+**Clients.** Desktop gets `--quality auto|original|<id>` (and a config key):
+it runs the bandwidth test at startup unless the profile is `original`, `PUT`s
+its settings, and shows `StreamInfo.summary` in the info overlay. Android gets
+a Quality screen listing the server's options with a "Recommended" badge, a
+separate choice for Wi-Fi and cellular (default Auto on both), and re-measures
+and `PUT`s on a network change. The Kotlin client is regenerated.
+
+```toml
+[transcode]
+# enabled = true          # default: on if ffmpeg works
+# ffmpeg = "ffmpeg"
+# ffprobe = "ffprobe"
+# hardware = "auto"       # nvenc | qsv | vaapi | videotoolbox | software
+# vaapi_device = "/dev/dri/renderD128"
+# max_sessions = 3
+# segment_seconds = 6
+# idle_timeout_s = 120
+# auto_headroom = 0.6
+```
+
+**Build order** (each step its own commit or PR):
+0. **Spike.** Hand-written ffmpeg commands behind a throwaway route. Check
+   that desktop mpv, Android mpv and iPad Safari play the VOD playlist from an
+   offset, seek into segments not yet encoded (a restart), and send the
+   `Authorization` header on segment requests (mpv `http-header-fields`).
+   *Fallback if mpv's HLS seeking misbehaves:* start-offset sessions like M12,
+   with the client adding the offset. Record the result here.
+1. Media probe and `media_json`, replacing duration probing.
+2. Encoder and tone-mapping detection; `[transcode]` config with the `[audio]`
+   alias.
+3. Profiles, `decide`, `/playback/profiles`, `/bandwidth`.
+4. Sessions and the HLS routes.
+5. `client_playback`, the `playback` routes, `now` integration, `StreamInfo`,
+   OpenAPI, Kotlin regeneration.
+6. Embedded text subtitle extraction.
+7. Audio-only migration (server, then Android).
+8. Desktop quality flag and bandwidth test; Android Quality screen and
+   network-change handling.
+
+**Complete when:**
+- [auto] The playlist has the right segment count and durations for a probed
+  item; an unknown item or profile is `404`; disabled transcoding is `503`.
+- [auto] Segment `0` of a test-library item is MPEG-TS with H.264 + AAC
+  (checked with ffprobe). A request far ahead restarts the encoder and returns
+  segment `n` with timestamps near `n × 6 s`.
+- [auto] Dropping a session, or idling past `idle_timeout_s`, kills ffmpeg and
+  removes its directory. `max_sessions` is enforced and `now` falls back to
+  direct with a warning.
+- [auto] `decide` passes a table covering: original, auto under and over
+  budget, incompatible codec, 10-bit, HDR, no upscaling, transcoding
+  unavailable.
+- [auto] The bandwidth algorithm is tested in Rust and Kotlin against a fake
+  transport.
+- [auto] `client_playback` round-trips. A client without settings gets
+  `/stream` URLs (M12 regression). `now` and `next` carry `StreamInfo`.
+  OpenAPI documents it and the Kotlin client is regenerated.
+- [auto] The media probe runs once per item and is invalidated by a changed
+  size or mtime.
+- [auto] Encoder detection falls back to software when hardware fails, and
+  turns transcoding off, with the server still starting, when ffmpeg is
+  missing.
+- [auto] The `audio` profile yields AAC TS segments; the `[audio]` alias maps
+  and warns.
+- [manual] On the NVIDIA server, `auto` over a throttled link (`tc`, or
+  Android on cellular) picks a lower rung and plays without stalling; the log
+  shows `h264_nvenc` and `nvidia-smi` shows the session.
+- [manual] Tune-in resumes at the right spot under transcoding; channel
+  up/down, ±30 s seeks and auto-advance behave as with Original.
+- [manual] An HDR10 item transcoded to 720p looks right, not washed out.
+- [manual] Switching Android between Wi-Fi and cellular changes the profile for
+  the next item.
+- [manual] Embedded text subtitles show under transcoding.
+- [manual] M12's manual audio criteria all pass on the new audio path.
+- [manual] iPad Safari plays the playlist URL (with a token query parameter
+  or open auth).
+
+### M14 — Offline downloads (outline only; designed in detail later)
+
+`POST /downloads {item_id, profile}` queues a job that renders through the same
+ffmpeg argument builder as M13's sessions into `data_dir/downloads/*.mp4`
+(faststart). Jobs run one at a time, below live sessions in priority, with a
+disk quota and expiry. `GET /downloads/{id}` reports status and
+`GET /downloads/{id}/file` serves the file with `Range`. Clients offer
+"download N hours of this channel" from `/channels/{id}/plan`, play downloads
+with the Tuner over a local queue, and queue progress and advance events to
+replay on reconnect (`advance` is already idempotent). This turns §2's
+"offline-first sync is a non-goal" into a limited offline mode for downloaded
+channels only. **M13 constraint:** one ffmpeg argument builder serves both HLS
+sessions and file jobs.
+
 ### After the MVP (not now)
 
 Example adapters over the M6 API, each a separate small program: a phone
@@ -1084,13 +1296,15 @@ libinput `InputSource` and DRM/KMS `Surface` for the appliance (§13), optional
 loudness normalization across items (background TV should not jump in volume
 between episodes), a sleep timer, mDNS discovery, stats views, search, a
 channel editor UI, multiple profiles, content fingerprinting to survive file
-moves, server-side video transcoding.
+moves, HEVC output, a multi-variant master playlist (adaptive bitrate), remuxing
+without re-encoding (for a web client), burning in PGS subtitles, and reading
+Jellyfin's own stream metadata instead of running ffprobe.
 
 ---
 
 ## 11. Non-goals for the MVP
 
-No video transcoding (M12's audio-only streams are the one exception). No multi-user or accounts (a single bearer token at most). No
+No video transcoding until M13 (M12's audio-only streams are the one exception). No multi-user or accounts (a single bearer token at most). No
 native SMB/NFS. No YouTube integration. No EPG with times. No phone remote UI
 (the action API exists; front-ends for it come later). No in-process plugin
 system. No Windows build (keep code portable, but do not test it yet).
@@ -1109,6 +1323,9 @@ system. No Windows build (keep code portable, but do not test it yet).
 | libcec bindings | Decided in M7: a C shim compiled against the installed libcec headers, so any libcec from 4.x works (Ubuntu 24.04 has 6, Fedora 44 has 7, Homebrew has 8). `cec-rs` is deprecated; Pulse-Eight's official `libcec` crate requires libcec 8, which distros and Raspberry Pi OS don't ship yet | When distros ship libcec 8: the official crate could replace the shim |
 | CEC claims active source on start | Off | Never by default; it's input 4 |
 | CEC resumes when TV switches to Marathon | On | If some TVs report routing changes unreliably |
+| Transcode segment format | MPEG-TS, 6 s, H.264 + AAC only | Moving to fMP4 when HEVC output, or remuxing for a web client, arrives |
+| Auto profile headroom | Use 60% of measured bandwidth | After living with it on real links |
+| Concurrent transcode sessions | 3 | When more than one household client transcodes at once |
 | Project license | MIT OR Apache-2.0 | Before publishing |
 
 ---
