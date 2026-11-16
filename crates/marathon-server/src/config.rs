@@ -432,6 +432,10 @@ pub struct TranscodeConfig {
     /// The share of a client's measured bandwidth the `auto` profile
     /// plans to use, in percent.
     pub auto_headroom_percent: u32,
+    /// Where transcoding sessions keep their segments: a `transcode`
+    /// directory is made inside it, and emptied whenever the server
+    /// starts. Defaults to `server.data_dir`. A tmpfs suits it well.
+    pub cache_dir: Option<PathBuf>,
     /// The quality ladder, replacing the built-in one when not empty
     /// (`[[transcode.profile]]`). `original`, `auto` and `audio` are always
     /// offered whatever this says.
@@ -467,6 +471,7 @@ impl Default for TranscodeConfig {
             segment_seconds: 6,
             idle_timeout_s: 120,
             auto_headroom_percent: 60,
+            cache_dir: None,
             profile: Vec::new(),
         }
     }
@@ -1131,7 +1136,8 @@ volume = 11"
             "{MINIMAL}
 [transcode]
 hardware = \"videotoolbox\"
-max_sessions = 1"
+max_sessions = 1
+cache_dir = \"/dev/shm\""
         ))
         .unwrap();
         assert_eq!(
@@ -1139,6 +1145,7 @@ max_sessions = 1"
             Some(TranscodeConfig {
                 hardware: Hardware::VideoToolbox,
                 max_sessions: 1,
+                cache_dir: Some(PathBuf::from("/dev/shm")),
                 ..TranscodeConfig::default()
             })
         );

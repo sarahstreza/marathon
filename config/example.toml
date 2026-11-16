@@ -35,6 +35,9 @@ data_dir = "~/.local/share/marathon"   # SQLite lives here
 # segment_seconds = 6                  # HLS segment length, 2 to 30
 # idle_timeout_s = 120                 # stop encoding after this long unwatched
 # auto_headroom_percent = 60           # share of measured bandwidth `auto` uses
+# cache_dir = "/dev/shm"               # where sessions keep segments (a `transcode`
+#                                      # folder inside it, emptied at startup); a
+#                                      # tmpfs is ideal. Default: the data_dir
 
 # A filesystem source. Mounted SMB/NFS shares work as ordinary paths.
 [[source]]
