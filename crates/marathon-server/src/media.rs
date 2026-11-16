@@ -324,7 +324,7 @@ impl App {
         self.inner
             .transcode
             .as_ref()
-            .and_then(|t| t.ffprobe.as_deref())
+            .map(|t| t.ffprobe.as_path())
             .or_else(|| self.inner.audio.as_ref()?.ffprobe.as_deref())
     }
 

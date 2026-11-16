@@ -102,7 +102,11 @@ impl App {
             .await
             .map_err(StartError::Sync)?;
         let audio = Audio::detect(config.audio.as_ref()).await;
-        let transcode = Transcode::detect(config.transcode.as_ref()).await;
+        let transcode = Transcode::detect(
+            config.transcode.as_ref(),
+            &expand_home(&config.server.data_dir),
+        )
+        .await;
         let app = App {
             inner: Arc::new(Inner {
                 db,

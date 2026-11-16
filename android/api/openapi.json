@@ -957,6 +957,178 @@
         }
       }
     },
+    "/api/v1/transcode/{item_id}/{profile}/index.m3u8": {
+      "get": {
+        "tags": [
+          "playback"
+        ],
+        "description": "An HLS VOD playlist for the whole item at a quality profile (PLAN.md M13): every segment, from first to last, so a player sees the item's real timeline and can seek anywhere. Nothing is encoded until a segment is asked for. Each request mints a session ID that the segment URLs carry; the session starts with its first segment, is dropped when unused for a while, and starts again if one of its segments is asked for later.",
+        "operationId": "transcode_playlist",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "path",
+            "description": "A transcoding profile ID from `POST /playback/profiles`, other than `original` and `auto`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {}
+            }
+          },
+          "400": {
+            "description": "The item has no video",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item, profile, or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The item could not be probed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server has no transcoding, or too many sessions are running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/transcode/{item_id}/{profile}/{segment}": {
+      "get": {
+        "tags": [
+          "playback"
+        ],
+        "description": "One segment (`N.ts`, MPEG-TS with H.264 and AAC) of a transcode, as the playlist lists them. It is encoded when asked for, unless it already is; a request far from the last one restarts the encoder there, so the first byte can take a few seconds.",
+        "operationId": "transcode_segment",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "path",
+            "description": "The profile of the playlist",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "segment",
+            "in": "path",
+            "description": "The segment: its number and `.ts`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "s",
+            "in": "query",
+            "description": "The session ID from the playlist",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The segment",
+            "content": {
+              "video/mp2t": {}
+            }
+          },
+          "400": {
+            "description": "Missing or malformed session ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such segment, item, or profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ffmpeg failed or was too slow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server has no transcoding, or too many sessions are running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/version": {
       "get": {
         "tags": [

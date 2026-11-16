@@ -60,6 +60,14 @@ pub fn router(app: App) -> Router {
         .route("/audio/{item_id}", get(audio))
         .route("/subtitles/{item_id}/{n}", get(subtitle))
         .route("/bandwidth", get(bandwidth))
+        .route(
+            "/transcode/{item_id}/{profile}/index.m3u8",
+            get(transcode_playlist),
+        )
+        .route(
+            "/transcode/{item_id}/{profile}/{segment}",
+            get(transcode_segment),
+        )
         .route("/playback/profiles", post(playback_profiles))
         .route("/history", get(history))
         .route("/library/rescan", post(rescan))
@@ -395,6 +403,73 @@ async fn audio(
         }
     };
     audio.stream(input, params.start_ms).await
+}
+
+#[utoipa::path(get, path = "/api/v1/transcode/{item_id}/{profile}/index.m3u8", tag = "playback",
+    description = "An HLS VOD playlist for the whole item at a quality profile (PLAN.md M13): \
+                   every segment, from first to last, so a player sees the item's real \
+                   timeline and can seek anywhere. Nothing is encoded until a segment is \
+                   asked for. Each request mints a session ID that the segment URLs carry; the \
+                   session starts with its first segment, is dropped when unused for a while, \
+                   and starts again if one of its segments is asked for later.",
+    params(
+        ("item_id" = String, Path, description = "Item ID"),
+        ("profile" = String, Path, description = "A transcoding profile ID from \
+            `POST /playback/profiles`, other than `original` and `auto`"),
+    ),
+    responses(
+        (status = 200, description = "The playlist", content_type = "application/vnd.apple.mpegurl"),
+        (status = 400, description = "The item has no video", body = ErrorBody),
+        (status = 404, description = "No such item, profile, or file", body = ErrorBody),
+        (status = 502, description = "The item could not be probed", body = ErrorBody),
+        (status = 503, description = "The server has no transcoding, or too many sessions are \
+            running", body = ErrorBody),
+    ))]
+async fn transcode_playlist(
+    State(app): State<App>,
+    path: Result<Path<(String, String)>, PathRejection>,
+) -> Result<Response, ApiError> {
+    let Path((item_id, profile)) = path.map_err(bad_path)?;
+    app.transcode_playlist(&item_id, &profile).await
+}
+
+#[derive(Debug, Deserialize)]
+struct SegmentParams {
+    s: Option<String>,
+}
+
+#[utoipa::path(get, path = "/api/v1/transcode/{item_id}/{profile}/{segment}", tag = "playback",
+    description = "One segment (`N.ts`, MPEG-TS with H.264 and AAC) of a transcode, as the \
+                   playlist lists them. It is encoded when asked for, unless it already is; \
+                   a request far from the last one restarts the encoder there, so the first \
+                   byte can take a few seconds.",
+    params(
+        ("item_id" = String, Path, description = "Item ID"),
+        ("profile" = String, Path, description = "The profile of the playlist"),
+        ("segment" = String, Path, description = "The segment: its number and `.ts`"),
+        ("s" = String, Query, description = "The session ID from the playlist"),
+    ),
+    responses(
+        (status = 200, description = "The segment", content_type = "video/mp2t"),
+        (status = 400, description = "Missing or malformed session ID", body = ErrorBody),
+        (status = 404, description = "No such segment, item, or profile", body = ErrorBody),
+        (status = 502, description = "ffmpeg failed or was too slow", body = ErrorBody),
+        (status = 503, description = "The server has no transcoding, or too many sessions are \
+            running", body = ErrorBody),
+    ))]
+async fn transcode_segment(
+    State(app): State<App>,
+    path: Result<Path<(String, String, String)>, PathRejection>,
+    query: Result<Query<SegmentParams>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let Path((item_id, profile, segment)) = path.map_err(bad_path)?;
+    let Query(params) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let n = segment
+        .strip_suffix(".ts")
+        .and_then(|n| n.parse::<u32>().ok())
+        .ok_or_else(|| ApiError::NotFound(format!("{segment:?} is not a segment (N.ts)")))?;
+    app.transcode_segment(&item_id, &profile, n, params.s.as_deref())
+        .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -779,7 +854,8 @@ pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
     ),
     paths(
         health, version, list_channels, now, progress, advance, previous, plan, item, stream,
-        audio, subtitle, bandwidth, playback_profiles, history, rescan, list_clients, connect, client_action, events, openapi,
+        audio, subtitle, bandwidth, transcode_playlist, transcode_segment, playback_profiles,
+        history, rescan, list_clients, connect, client_action, events, openapi,
     ),
     components(schemas(
         Health, VersionInfo, ChannelSummary, ChannelRef, Now, NextItem, PlannedItem, Item, Subtitle, ProgressReport,
