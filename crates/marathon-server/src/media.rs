@@ -10,11 +10,23 @@
 //! This is deliberately a small summary of what profile selection and
 //! transcoding need, not a mirror of ffprobe's output.
 
-// Nothing uses this yet: the probe that fills it in comes in the next
-// commit, which removes this allow.
-#![allow(dead_code)]
+use std::ffi::OsString;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
 
+use marathon_api::Now;
 use serde::{Deserialize, Serialize};
+use tokio::process::Command;
+
+use crate::app::App;
+use crate::audio::{Input, file_url};
+use crate::http::safe_join;
+use crate::sources::Source;
+
+/// How long probing one item may take. ffprobe reads only the container's
+/// headers, so this is generous even for a network share.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The facts about one media file that decide how it can be streamed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -259,6 +271,144 @@ impl Stream {
     }
 }
 
+// --- Probing ---------------------------------------------------------------
+
+/// ffprobe's arguments for printing `input`'s format and streams as JSON.
+fn ffprobe_args(input: &Input) -> Vec<OsString> {
+    let mut args: Vec<OsString> = ["-v", "error", "-print_format", "json"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.push("-show_format".into());
+    args.push("-show_streams".into());
+    if let Input::Http { headers, .. } = input {
+        args.push("-headers".into());
+        args.push(headers.into());
+    }
+    args.push(match input {
+        Input::File(path) => file_url(path),
+        Input::Http { url, .. } => url.into(),
+    });
+    args
+}
+
+/// Runs ffprobe on `input`.
+async fn probe(ffprobe: &Path, input: &Input) -> Result<MediaInfo, String> {
+    let mut command = Command::new(ffprobe);
+    command
+        .args(ffprobe_args(input))
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    let output = match tokio::time::timeout(PROBE_TIMEOUT, command.output()).await {
+        Err(_) => return Err(format!("ffprobe took over {PROBE_TIMEOUT:?}")),
+        Ok(Err(err)) => return Err(format!("cannot run ffprobe: {err}")),
+        Ok(Ok(output)) => output,
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "ffprobe failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    MediaInfo::from_ffprobe(&String::from_utf8_lossy(&output.stdout))
+        .map_err(|err| format!("cannot read ffprobe's output: {err}"))
+}
+
+impl App {
+    /// What is known about an item's media, probing it (once) if need be.
+    ///
+    /// The result is stored in `items.media_json` and served from there
+    /// until a rescan sees the file change. A probe that fails is
+    /// remembered in memory, so a broken file is not retried on every
+    /// tune-in. `None` when the server has no ffprobe, the item is
+    /// missing, or probing failed.
+    ///
+    /// Probing also fills in a missing duration.
+    pub(crate) async fn media_info(&self, item_id: &str) -> Option<MediaInfo> {
+        let audio = self.inner.audio.as_ref()?;
+        let ffprobe = audio.ffprobe.as_ref()?;
+        let row = self.db().item(item_id).await.ok().flatten()?;
+        if let Some(json) = self.db().media_json(item_id).await.ok().flatten() {
+            match serde_json::from_str(&json) {
+                Ok(info) => return Some(info),
+                Err(err) => {
+                    tracing::warn!(item = item_id, %err, "stored media info unreadable; probing again");
+                }
+            }
+        }
+        if audio.is_unprobeable(item_id) || row.missing {
+            return None;
+        }
+        let input = match self.source(&row.source_id)? {
+            Source::Filesystem { root } => Input::File(safe_join(root, &row.path)?),
+            Source::Jellyfin(client) => {
+                let (url, headers) = client.ffmpeg_input(row.external_id.as_deref()?);
+                Input::Http { url, headers }
+            }
+        };
+        match probe(ffprobe, &input).await {
+            Ok(info) => {
+                tracing::debug!(item = item_id, "probed media");
+                match serde_json::to_string(&info) {
+                    Ok(json) => {
+                        if let Err(err) = self.db().set_media_json(item_id, &json).await {
+                            tracing::warn!(item = item_id, %err, "cannot store probed media info");
+                        }
+                    }
+                    Err(err) => tracing::warn!(item = item_id, %err, "cannot encode media info"),
+                }
+                if row.duration_ms.is_none()
+                    && let Some(duration_ms) = info.duration_ms
+                    && let Err(err) = self
+                        .db()
+                        .set_duration(item_id, i64::try_from(duration_ms).unwrap_or(i64::MAX))
+                        .await
+                {
+                    tracing::warn!(item = item_id, %err, "cannot store probed duration");
+                }
+                Some(info)
+            }
+            Err(reason) => {
+                tracing::info!(item = item_id, path = %row.path, %reason,
+                    "cannot probe the item; it stays without media info");
+                audio.mark_unprobeable(item_id);
+                None
+            }
+        }
+    }
+
+    /// Fills in `now`'s missing durations by probing, when ffprobe is
+    /// available (see `audio`'s module docs). The current item is probed
+    /// before returning, so the client gets its duration; the next item is
+    /// probed in the background, ready for when the channel gets to it.
+    ///
+    /// Never fails: an item that cannot be probed keeps no duration.
+    pub(crate) async fn with_probed_media(&self, mut now: Now) -> Now {
+        if now.item.duration_ms.is_none() {
+            now.item.duration_ms = self
+                .media_info(&now.item.id)
+                .await
+                .and_then(|info| info.duration_ms);
+        }
+        if let Some(next) = &mut now.next
+            && next.item.id == now.item.id
+        {
+            // A one-item channel: its next item is this one again.
+            next.item.duration_ms = now.item.duration_ms;
+        }
+        if let Some(next) = &now.next
+            && next.item.duration_ms.is_none()
+        {
+            let app = self.clone();
+            let id = next.item.id.clone();
+            tokio::spawn(async move { app.media_info(&id).await });
+        }
+        now
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +532,32 @@ mod tests {
         let info = MediaInfo::from_ffprobe(HDR_MKV).unwrap();
         let json = serde_json::to_string(&info).unwrap();
         assert_eq!(serde_json::from_str::<MediaInfo>(&json).unwrap(), info);
+    }
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter().map(|a| a.into_string().unwrap()).collect()
+    }
+
+    #[test]
+    fn ffprobe_args_for_a_file_keep_odd_names_as_files() {
+        let args = strings(ffprobe_args(&Input::File("/m/-x: http.mkv".into())));
+        assert_eq!(
+            args.join(" "),
+            "-v error -print_format json -show_format -show_streams file:/m/-x: http.mkv"
+        );
+    }
+
+    #[test]
+    fn ffprobe_args_for_jellyfin_send_headers_before_the_url() {
+        let args = strings(ffprobe_args(&Input::Http {
+            url: "http://jf/Videos/x/stream?static=true".into(),
+            headers: "Authorization: k\r\n".into(),
+        }));
+        let at = |s: &str| args.iter().position(|a| a == s).unwrap();
+        assert_eq!(args[at("-headers") + 1], "Authorization: k\r\n");
+        assert_eq!(
+            args.last().unwrap(),
+            "http://jf/Videos/x/stream?static=true"
+        );
     }
 }

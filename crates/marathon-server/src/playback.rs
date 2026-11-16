@@ -113,7 +113,7 @@ impl App {
         let now = self.to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
         // Probing can take a moment; other requests needn't wait for it.
         drop(guard);
-        Ok(self.with_probed_durations(now).await)
+        Ok(self.with_probed_media(now).await)
     }
 
     /// `POST /channels/{id}/progress`: saves the playback position. For a
@@ -230,7 +230,7 @@ impl App {
         }
         let now = self.to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
         drop(guard);
-        Ok(self.with_probed_durations(now).await)
+        Ok(self.with_probed_media(now).await)
     }
 
     /// `GET /channels/{id}/plan`: what the channel will play, starting with

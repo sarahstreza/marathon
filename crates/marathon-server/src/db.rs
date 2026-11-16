@@ -364,7 +364,8 @@ impl Db {
             sqlx::query(
                 "UPDATE items SET size = ?, mtime = ?, show = ?, season = ?, episode = ?,
                     title = ?, subtitles_json = ?, external_id = ?, missing = 0,
-                    duration_ms = COALESCE(?, CASE WHEN ? THEN NULL ELSE duration_ms END)
+                    duration_ms = COALESCE(?, CASE WHEN ? THEN NULL ELSE duration_ms END),
+                    media_json = CASE WHEN ? THEN NULL ELSE media_json END
                  WHERE id = ?",
             )
             .bind(item.size)
@@ -376,6 +377,7 @@ impl Db {
             .bind(&item.subtitles_json)
             .bind(&item.external_id)
             .bind(item.duration_ms)
+            .bind(*file_changed)
             .bind(*file_changed)
             .bind(id)
             .execute(&mut *tx)
@@ -394,6 +396,26 @@ impl Db {
     pub async fn set_duration(&self, item_id: &str, duration_ms: i64) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE items SET duration_ms = ? WHERE id = ?")
             .bind(duration_ms)
+            .bind(item_id)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+    }
+
+    /// The stored `MediaInfo` JSON for an item (PLAN.md M13), if it has
+    /// been probed since its file last changed.
+    pub async fn media_json(&self, item_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT media_json FROM items WHERE id = ?")
+                .bind(item_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(json,)| json))
+    }
+
+    pub async fn set_media_json(&self, item_id: &str, json: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE items SET media_json = ? WHERE id = ?")
+            .bind(json)
             .bind(item_id)
             .execute(&self.pool)
             .await

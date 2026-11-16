@@ -410,3 +410,46 @@ async fn now_offers_audio_urls_exactly_when_audio_is_on() {
     assert_eq!(tuned["audio_url"], serde_json::Value::Null);
     assert_eq!(tuned["next"]["audio_url"], serde_json::Value::Null);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probing_stores_the_media_and_a_changed_file_clears_it() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        return;
+    }
+    let env = TestEnv::new();
+    write_clip(&env, CLIP, 3);
+    let ffprobe = counting_ffprobe(env.dir.path());
+    let app = app_with_audio(
+        &env,
+        &format!("ffprobe = {:?}", ffprobe.display().to_string()),
+    )
+    .await;
+
+    let first = now(&app, "misc").await;
+    let id = first["item"]["id"].as_str().unwrap().to_owned();
+    let stored = app
+        .db()
+        .media_json(&id)
+        .await
+        .unwrap()
+        .expect("the probe stores the item's media");
+    let media: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(media["video"]["codec"], "ffv1");
+    assert_eq!(media["video"]["height"], 24);
+    assert_eq!(media["audio"][0]["codec"], "flac");
+    assert_eq!(media["audio"][0]["channels"], 1);
+
+    // Rescanning an unchanged file keeps what was probed.
+    app.rescan().await.unwrap();
+    assert!(app.db().media_json(&id).await.unwrap().is_some());
+
+    // A changed file loses it, and the next tune-in probes again.
+    write_clip(&env, CLIP, 5);
+    app.rescan().await.unwrap();
+    assert_eq!(app.db().media_json(&id).await.unwrap(), None);
+    let again = now(&app, "misc").await;
+    let duration = again["item"]["duration_ms"].as_u64().expect("re-probed");
+    assert!((4_900..=5_100).contains(&duration), "{duration}");
+    assert_eq!(probe_count(env.dir.path()), 2);
+}
