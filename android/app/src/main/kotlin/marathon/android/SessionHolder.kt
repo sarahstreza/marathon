@@ -4,11 +4,14 @@
 // - audio-only mode, and the PlaybackService that keeps playing in the
 //   background while it is on;
 // - audio focus, and pausing when headphones are unplugged;
-// - the sleep timer, which must still fire with the screen off.
+// - the sleep timer, which must still fire with the screen off;
+// - whether Android Auto is connected (docs/ANDROID.md "Android Auto").
 //
-// MainActivity creates the Session (it knows the server) and shows it;
-// PlaybackService keeps the process, and so the Session, alive while
-// listening in the background. The Session is closed once neither needs it.
+// MainActivity usually creates the Session (it knows the server) and shows
+// it. Android Auto can also start one from the saved server, with no
+// activity at all (startForCar). PlaybackService keeps the process, and
+// so the Session, alive while listening in the background. The Session is
+// closed once neither needs it.
 //
 // Everything here runs on the main thread, except `session`, which any
 // thread may read.
@@ -27,6 +30,9 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import marathon.core.Action
+import marathon.core.ApiError
+import marathon.core.Log
+import marathon.core.PlayerError
 import marathon.core.SystemClock
 
 object SessionHolder {
@@ -46,7 +52,11 @@ object SessionHolder {
     /** Whether MainActivity exists at all (it can be destroyed while the service plays on). */
     private var activityAlive = false
 
-    /** Whether PlaybackService is running. */
+    /**
+     * Whether PlaybackService is listening in the background (in the
+     * foreground, with its notification). It can also run without, while
+     * Android Auto is connected to it.
+     */
     var serviceRunning = false
         private set
 
@@ -70,6 +80,32 @@ object SessionHolder {
             stopService(context)
             val activity = onQuit
             if (activity != null) activity() else close()
+        }
+    }
+
+    /**
+     * The session, or for Android Auto, a new one from the saved server in
+     * audio-only mode, started without an activity. Null when no server is
+     * set up yet, or the session can't start.
+     */
+    fun startForCar(context: Context): Session? {
+        sessionState.value?.let { return it }
+        val app = context.applicationContext
+        val settings = Settings(app)
+        val server = settings.server() ?: return null
+        return try {
+            Session(app, server, settings.clientId(), onQuit = { quit(app) }).also {
+                Log.info("starting a session for Android Auto")
+                it.player.setAudioOnly(true)
+                sessionState.value = it
+                it.start()
+            }
+        } catch (e: ApiError) {
+            Log.warn("cannot start a session for Android Auto: ${e.message}")
+            null
+        } catch (e: PlayerError) {
+            Log.warn("cannot start a session for Android Auto: ${e.message}")
+            null
         }
     }
 
@@ -123,6 +159,32 @@ object SessionHolder {
         serviceRunning = false
         updateFocus(context)
         if (!activityAlive) close()
+    }
+
+    // --- Android Auto -----------------------------------------------------
+
+    private val carState = MutableStateFlow(false)
+
+    /** Whether Android Auto (or Android Automotive) is browsing PlaybackService. */
+    val car: StateFlow<Boolean> = carState
+
+    /**
+     * A car connected: there's no picture to watch while driving, so a
+     * session playing video switches to audio only. Not saved, so the app
+     * opens as it was set the next time.
+     */
+    fun carConnected(context: Context) {
+        if (carState.value) return
+        Log.info("Android Auto connected")
+        carState.value = true
+        val session = sessionState.value ?: return
+        if (!session.player.audioOnly.value) setAudioOnly(context, true)
+    }
+
+    fun carDisconnected() {
+        if (!carState.value) return
+        Log.info("Android Auto disconnected")
+        carState.value = false
     }
 
     // --- Audio only -----------------------------------------------------

@@ -13,6 +13,9 @@
     <string name="playback_channel_description">What\'s playing while Marathon is in the background, with its controls.</string>
     <string name="playback_close">Stop listening</string>
 
+    <!-- Android Auto (PlaybackService) -->
+    <string name="car_channels">Channels</string>
+
     <!-- Widgets -->
     <string name="widget_list_label">Marathon channels</string>
     <string name="widget_list_description">Every channel and what it\'s on. Tap one to watch it.</string>

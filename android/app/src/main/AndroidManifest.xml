@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Audio-only mode keeps playing in the background (PlaybackService). -->
@@ -31,13 +32,32 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- "Play <channel> on Marathon" (MainActivity.playFromSearch). -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
-        <!-- Background listening in audio-only mode. Only Marathon starts it. -->
+        <!-- Background listening in audio-only mode, and Android Auto
+             (docs/ANDROID.md). Exported so cars can bind to it as a
+             MediaBrowserService; it only lets car apps browse
+             (CarMedia.CAR_BROWSERS), and its notification buttons go
+             through a receiver only Marathon can send to. -->
         <service
             android:name=".PlaybackService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Marks Marathon as a media app for Android Auto. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
 
         <!-- Home-screen widgets (widget/). Android itself sends their
              updates, so they need not be exported. -->

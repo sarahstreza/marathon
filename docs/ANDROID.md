@@ -259,6 +259,9 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
   `POST_NOTIFICATIONS`, for listening in the background (see "Audio only").
   The notification permission is requested the first time audio only is
   turned on; without it, playback works but shows no notification.
+- `PlaybackService` is exported with a `MediaBrowserService` intent
+  filter, and `MainActivity` takes `MEDIA_PLAY_FROM_SEARCH`, for Android
+  Auto and voice search (see "Android Auto").
 
 ### Sleep timer
 
@@ -316,6 +319,55 @@ screen off. The choice is saved (`Settings.audioOnly`).
   `SessionHolder` (a process-wide object), not the activity: the activity
   creates and shows the session, and the service keeps the process alive.
   The session is closed when neither needs it.
+- **Seek bar and artwork.** The media session publishes the item's
+  duration and position, so the lock screen (Android 13+) and cars show a
+  seek bar; a scrub becomes `SeekRelative` from where playback is. While
+  listening in the background, the artwork is a thumbnail of what's
+  playing (`GET /thumbnail/{id}?at_ms=&width=480`), fetched when an item
+  starts and every 30 s while it plays on (`ThumbnailSchedule`), not
+  while paused. A server without ffmpeg makes none: the artwork stays
+  empty.
+
+### Android Auto
+
+`PlaybackService` is also a `MediaBrowserService`, and the manifest
+marks Marathon as an Auto media app (`res/xml/automotive_app_desc.xml`).
+It needs no extra library: the framework's `MediaSession` and
+`MediaBrowserService` are what Auto speaks.
+
+- **Browsing.** Only Android Auto and Android Automotive's media app
+  (`CarMedia.CAR_BROWSERS`) get a browse root; anything else (System UI's
+  media resumption, other apps) gets none. The root has one tab,
+  *Channels*: every channel as the guide lists it, with what it's on.
+  Picking one sends `GoToChannelId` and `Play`. With no server set up,
+  the car shows "Open Marathon to choose a server."
+- **Audio only.** When a car connects (it asks for the browse root), a
+  session playing video switches to audio only. That isn't saved, so the
+  app opens as before next time. If the app has no session (it was never
+  opened, or was closed), playing from the car starts one from the saved
+  server, in audio-only mode, without an activity
+  (`SessionHolder.startForCar`). Either way it listens in the background
+  as above; Android lets a media session's command start a foreground
+  service from the background.
+- **Controls.** While a car is connected, the skip buttons are
+  `NextItem` / `PreviousItem` (switching videos) and channel down/up are
+  custom actions beside them. Elsewhere (lock screen, headsets) skip
+  stays channel down/up, as before. Scrubbing works as on the lock
+  screen. Voice search ("play The Office on Marathon") matches a channel
+  by number, then name, then part of a name (`CarMedia.searchChannel`);
+  `MainActivity` handles the same search intent on the phone.
+- **Disconnecting.** When the car unbinds, the controls go back to the
+  phone's layout. Playback carries on in the background, as if you'd
+  left the app in audio-only mode.
+
+The notification's buttons go through a broadcast receiver only
+Marathon can send to, because the service itself is exported for cars.
+
+**Testing without a car.** Auto only lists apps from the Play Store
+unless you turn on *Unknown sources* in Android Auto's developer
+settings (tap its version number ten times to reveal them). The Desktop
+Head Unit (DHU, in the SDK's *Android Auto Desktop Head Unit Emulator*
+package) shows Auto on a computer over `adb forward tcp:5277 tcp:5277`.
 
 ### Widgets
 
