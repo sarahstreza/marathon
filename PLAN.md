@@ -1130,15 +1130,28 @@ durations come from it.
 
 **Encoders.** At startup, like M12's ffmpeg check, `[transcode] hardware =
 "auto"` tries each encoder with a one-second `lavfi` test encode, in this
-order: `h264_nvenc` (CUDA decode, `scale_cuda`), `h264_qsv`, `h264_vaapi`,
-`h264_videotoolbox`, `libx264`, `libopenh264`. The first that works is used and
-logged; `hardware` can also name one. HDR (PQ/HLG) sources going to 8-bit H.264
-are tone-mapped with the first of `tonemap_opencl`, `libplacebo`, or software
-`zscale`+`tonemap` that works; if none does, HDR items are transcoded
-unmapped and the server warns. Packaging: the Docker image needs the NVIDIA
-container toolkit for NVENC; Fedora's `ffmpeg-free` may lack NVENC (check
-`ffmpeg -encoders`; RPM Fusion's build has it); the Nix module takes an
-ffmpeg with NVENC.
+order: `h264_nvenc`, `h264_qsv`, `h264_vaapi`, `h264_videotoolbox`, `libx264`,
+`libopenh264`. The first that works is used and logged; `hardware` can also
+name one. **Software x264 is a first-class path, not a fallback:** a server's
+GPU may be too old for its ffmpeg's hardware encoder (a Kepler-era NVIDIA
+card, say), and a modern many-core CPU encodes several 1080p streams in
+real time. Hardware encoders only encode: decoding and scaling stay on the
+CPU, with frames uploaded to the encoder (`hwupload` for VAAPI/QSV), because
+GPU filters (`scale_cuda`, `scale_vaapi`) vary too much between GPUs and
+drivers to rely on. HDR (PQ/HLG) sources going to 8-bit H.264 are tone-mapped
+**after downscaling**, so the costly float conversion runs on the output's
+pixels rather than a 4K source's, with the first of `tonemap_opencl`,
+`libplacebo`, or software `zscale`+`tonemap` that works; if none does, HDR
+items are transcoded unmapped and the server warns. Packaging: the Docker
+image needs the NVIDIA container toolkit for NVENC; Fedora's `ffmpeg-free`
+may lack NVENC (check `ffmpeg -encoders`; RPM Fusion's build has it); the Nix
+module takes an ffmpeg with NVENC.
+
+**Falling behind.** A session reads ffmpeg's `-progress` output; if the
+encode runs slower than real time for a while the server logs a warning, and
+`auto` plans the next item one rung lower. Software encoders use `-preset
+veryfast` with a bounded thread count, so one session cannot take the whole
+CPU.
 
 **Profiles.** The default ladder (overridable with `[[transcode.profile]]`) is
 `original`, `auto`, `1080p` (8 Mbit/s), `720p` (4), `720p-low` (2), `480p`
@@ -1213,7 +1226,8 @@ and `PUT`s on a network change. The Kotlin client is regenerated.
 # max_sessions = 3
 # segment_seconds = 6
 # idle_timeout_s = 120
-# auto_headroom = 0.6
+# auto_headroom_percent = 60
+# cache_dir = "<data_dir>/transcode"   # a tmpfs works well for this
 ```
 
 **Build order** (each step its own commit or PR):
@@ -1259,9 +1273,12 @@ and `PUT`s on a network change. The Kotlin client is regenerated.
   missing.
 - [auto] The `audio` profile yields AAC TS segments; the `[audio]` alias maps
   and warns.
-- [manual] On the NVIDIA server, `auto` over a throttled link (`tc`, or
-  Android on cellular) picks a lower rung and plays without stalling; the log
-  shows `h264_nvenc` and `nvidia-smi` shows the session.
+- [manual] On the real server, `auto` over a throttled link (`tc`, or Android
+  on cellular) picks a lower rung and plays without stalling; the log shows
+  which encoder was chosen.
+- [manual] On the real server, a 1080p software transcode runs at 1× speed or
+  better with three sessions at once, and a 4K HDR item transcoded to 720p
+  keeps up (the `-progress` speed stays at or above 1.0).
 - [manual] Tune-in resumes at the right spot under transcoding; channel
   up/down, ±30 s seeks and auto-advance behave as with Original.
 - [manual] An HDR10 item transcoded to 720p looks right, not washed out.
@@ -1324,7 +1341,7 @@ system. No Windows build (keep code portable, but do not test it yet).
 | CEC claims active source on start | Off | Never by default; it's input 4 |
 | CEC resumes when TV switches to Marathon | On | If some TVs report routing changes unreliably |
 | Transcode segment format | MPEG-TS, 6 s, H.264 + AAC only | Moving to fMP4 when HEVC output, or remuxing for a web client, arrives |
-| Auto profile headroom | Use 60% of measured bandwidth | After living with it on real links |
+| Auto profile headroom | Use 60% of measured bandwidth (`auto_headroom_percent`; a whole percent because the config derives `Eq`) | After living with it on real links |
 | Concurrent transcode sessions | 3 | When more than one household client transcodes at once |
 | Project license | MIT OR Apache-2.0 | Before publishing |
 
