@@ -114,4 +114,26 @@ class HttpApiTest {
         // Port 1 on loopback refuses connections.
         assertThrows<ApiError.Transport> { HttpApi("http://127.0.0.1:1", null, "c").channels() }
     }
+
+    @Test
+    fun thumbnails_are_bytes_with_the_time_and_width() {
+        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3)
+        server.enqueue(MockResponse.Builder().addHeader("Content-Type", "image/jpeg").body(okio.Buffer().write(jpeg)).build())
+        val api = HttpApi(base("marathon"), "secret", "client-1")
+        assertEquals(jpeg.toList(), api.thumbnail("a b", 61_005, 320).toList())
+        val request = server.takeRequest()
+        assertEquals("/marathon/api/v1/thumbnail/a%20b", request.url.encodedPath)
+        assertEquals("61005", request.url.queryParameter("at_ms"))
+        assertEquals("320", request.url.queryParameter("width"))
+        assertEquals("Bearer secret", request.headers["Authorization"])
+    }
+
+    @Test
+    fun a_server_without_thumbnails_is_unavailable() {
+        server.enqueue(json("""{"code":"unavailable","message":"no ffmpeg"}""", code = 503))
+        val api = HttpApi(base(), null, "client-1")
+        val error = assertThrows<ApiError.Server> { api.thumbnail("i1", 0, 480) }
+        assertEquals(503, error.status)
+        assertEquals(ErrorCode.UNAVAILABLE, error.code)
+    }
 }

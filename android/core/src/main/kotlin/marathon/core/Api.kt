@@ -30,6 +30,7 @@ import marathon.api.models.ProgressReport
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /** The header that identifies a client to the server. */
 const val CLIENT_ID_HEADER: String = "X-Marathon-Client"
@@ -152,6 +153,29 @@ class HttpApi(baseUrl: String, token: String?, clientId: String) : Api {
 
     /** `GET /health`: whether the server is up and the token is accepted. */
     fun health(): String = call { serverApi.health().status }
+
+    /**
+     * `GET /thumbnail/{itemId}?at_ms=&width=`: one frame of the item as
+     * JPEG bytes, for showing what's on without the video. Servers offer
+     * thumbnails exactly when they offer audio streams; one without them
+     * answers [ApiError.Server] with [ErrorCode.UNAVAILABLE]. Blocking.
+     */
+    fun thumbnail(itemId: String, atMs: Long, width: Int): ByteArray {
+        val url = base.newBuilder()
+            .addPathSegments("api/v1/thumbnail")
+            .addPathSegment(itemId)
+            .addQueryParameter("at_ms", atMs.coerceAtLeast(0).toString())
+            .addQueryParameter("width", width.toString())
+            .build()
+        return try {
+            http.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful) throw serverError(response.code, response.body.string())
+                response.body.bytes()
+            }
+        } catch (e: IOException) {
+            throw ApiError.Transport(e.message ?: e.toString())
+        }
+    }
 
     override fun channels(): List<ChannelSummary> = call {
         channelsApi.listChannels().map { c -> c.copy(current = c.current?.let(::absoluteItem)) }
