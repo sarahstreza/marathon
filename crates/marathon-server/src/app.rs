@@ -13,6 +13,7 @@ use crate::db::{ChannelRow, Db, OpenError, SourceDef};
 use crate::jellyfin::JellyfinError;
 use crate::relay::Relay;
 use crate::sources::{Source, Sources};
+use crate::transcode::Transcode;
 
 /// File name of the SQLite database inside `data_dir`.
 pub const DATABASE_FILE: &str = "marathon.db";
@@ -70,6 +71,8 @@ pub(crate) struct Inner {
     pub(crate) sources: Sources,
     /// Audio-only streaming (PLAN.md M12), if ffmpeg is available.
     pub(crate) audio: Option<Audio>,
+    /// Live transcoding (PLAN.md M13), if ffmpeg has a working encoder.
+    pub(crate) transcode: Option<Transcode>,
 }
 
 impl App {
@@ -96,6 +99,7 @@ impl App {
             .await
             .map_err(StartError::Sync)?;
         let audio = Audio::detect(config.audio.as_ref()).await;
+        let transcode = Transcode::detect(config.transcode.as_ref()).await;
         let app = App {
             inner: Arc::new(Inner {
                 db,
@@ -105,6 +109,7 @@ impl App {
                 relay: Relay::new(),
                 sources,
                 audio,
+                transcode,
             }),
         };
         let report = app.rescan().await.map_err(StartError::Scan)?;
@@ -126,6 +131,12 @@ impl App {
     /// allows them and ffmpeg ran at startup.
     pub fn audio_enabled(&self) -> bool {
         self.inner.audio.is_some()
+    }
+
+    /// Whether the server offers live transcoding (PLAN.md M13):
+    /// `[transcode]` allows it and ffmpeg has an encoder that works.
+    pub fn transcode_enabled(&self) -> bool {
+        self.inner.transcode.is_some()
     }
 
     /// The client relay: control channels and the event stream.

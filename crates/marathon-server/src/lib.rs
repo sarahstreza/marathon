@@ -23,6 +23,7 @@ pub mod catalog;
 pub mod config;
 pub mod db;
 pub mod embedded;
+mod encoder;
 mod error;
 pub mod http;
 pub mod jellyfin;
@@ -33,6 +34,7 @@ mod playback;
 pub mod relay;
 pub mod scan;
 pub mod sources;
+mod transcode;
 
 use std::future::{Future, IntoFuture};
 use std::net::SocketAddr;
