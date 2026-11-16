@@ -26,6 +26,7 @@ pub mod embedded;
 mod error;
 pub mod http;
 pub mod jellyfin;
+mod media;
 mod nested;
 pub mod parse;
 mod playback;
