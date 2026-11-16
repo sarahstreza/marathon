@@ -15,9 +15,14 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 mod control;
+mod quality;
 
 pub use control::{
     Action, ActionAccepted, ClientInfo, ClientPlaying, Direction, Event, RelayedEvent,
+};
+pub use quality::{
+    Capabilities, PROFILE_AUTO, PROFILE_ORIGINAL, ProfileKind, ProfileOption, ProfilesRequest,
+    VideoCodecSupport,
 };
 
 /// The client ID that `POST /clients/{id}/actions` resolves to the most
