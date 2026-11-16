@@ -1249,6 +1249,19 @@ and `PUT`s on a network change. The Kotlin client is regenerated.
 8. Desktop quality flag and bandwidth test; Android Quality screen and
    network-change handling.
 
+**Status.** Build steps 1–5 are done: media probing, encoder detection,
+profiles and `decide`, `/bandwidth` and `/playback/profiles`, the HLS sessions
+and `/transcode` routes, stored client settings, and `now`/`advance`/`previous`
+choosing a stream with `stream` and `warnings`. Not yet: the spike's Android and
+iPad checks (desktop mpv, including a mid-file start and live seeking, has been
+checked by hand), embedded text subtitles (step 6; **until then a transcoded
+stream drops the file's embedded subtitles**), moving audio-only onto the
+pipeline (7), and the desktop and Android quality UI (8). Two things changed
+from the text above while building: a session is created by the first segment
+request that carries its ID, not by the playlist (mpv's youtube-dl hook fetches
+a playlist twice, which used up `max_sessions` before any video played), and
+transcoding is off unless ffprobe runs as well as ffmpeg.
+
 **Complete when:**
 - [auto] The playlist has the right segment count and durations for a probed
   item; an unknown item or profile is `404`; disabled transcoding is `503`.
