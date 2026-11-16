@@ -388,6 +388,13 @@ pub mod paths {
         format!("{API_PREFIX}/audio/{item_id}")
     }
 
+    /// `GET`: one frame of an item as a JPEG. Add `?at_ms=` for the time
+    /// and `&width=` for its width in pixels. Offered when audio streams
+    /// are (the server has ffmpeg).
+    pub fn thumbnail(item_id: &str) -> String {
+        format!("{API_PREFIX}/thumbnail/{item_id}")
+    }
+
     /// `GET`: the `index`th sidecar subtitle of an item.
     pub fn subtitle(item_id: &str, index: u32) -> String {
         format!("{API_PREFIX}/subtitles/{item_id}/{index}")

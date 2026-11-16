@@ -7,6 +7,7 @@
 package marathon.android
 
 import android.Manifest
+import android.app.SearchManager
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -15,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -38,7 +40,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import marathon.android.ui.SetupScreen
 import marathon.android.ui.WatchScreen
+import marathon.android.widget.WidgetLoad
 import marathon.android.widget.Widgets
+import kotlin.concurrent.thread
 import marathon.core.Action
 import marathon.core.ApiError
 import marathon.core.Log
@@ -84,14 +88,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.sink = { level, message ->
-            when (level) {
-                Log.Level.Debug -> android.util.Log.d(TAG, message)
-                Log.Level.Info -> android.util.Log.i(TAG, message)
-                Log.Level.Warn -> android.util.Log.w(TAG, message)
-                Log.Level.Error -> android.util.Log.e(TAG, message)
-            }
-        }
+        installAndroidLog()
         settings = Settings(this)
         clientId = settings.clientId()
         SessionHolder.attach(this)
@@ -209,12 +206,38 @@ class MainActivity : ComponentActivity() {
      * (the action queues behind its start), then switches.
      */
     private fun openChannelFrom(intent: Intent) {
+        if (intent.action == MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) return playFromSearch(intent)
         val channelId = intent.getStringExtra(Widgets.EXTRA_CHANNEL_ID) ?: return
         intent.removeExtra(Widgets.EXTRA_CHANNEL_ID)
         // No server yet: Setup is showing, and the widget can't have a channel anyway.
         val s = session ?: return
         showSetup = false
         s.send(Action.GoToChannelId(channelId), "widget")
+    }
+
+    /**
+     * A voice search ("play The Office on Marathon"): tunes to the channel
+     * it names, if any ([CarMedia.searchChannel]), and plays.
+     */
+    private fun playFromSearch(intent: Intent) {
+        val query = intent.getStringExtra(SearchManager.QUERY)
+        intent.action = null
+        val s = session ?: return
+        showSetup = false
+        if (query.isNullOrBlank()) {
+            s.send(Action.Play, "voice")
+            return
+        }
+        thread(name = "voice-search") {
+            val load = Widgets.load(applicationContext)
+            val match = (load as? WidgetLoad.Loaded)?.let { CarMedia.searchChannel(query, it.channels) }
+            if (match == null) {
+                s.toast("No channel called \"$query\"")
+            } else {
+                s.send(Action.GoToChannelId(match.id), "voice")
+            }
+            s.send(Action.Play, "voice")
+        }
     }
 
     /** The Audio only button. */
@@ -321,9 +344,5 @@ class MainActivity : ComponentActivity() {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-    }
-
-    private companion object {
-        const val TAG = "Marathon"
     }
 }

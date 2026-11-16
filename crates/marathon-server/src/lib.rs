@@ -32,6 +32,7 @@ mod playback;
 pub mod relay;
 pub mod scan;
 pub mod sources;
+mod thumbnail;
 
 use std::future::{Future, IntoFuture};
 use std::net::SocketAddr;
