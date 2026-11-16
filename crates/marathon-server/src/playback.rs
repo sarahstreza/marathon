@@ -113,7 +113,8 @@ impl App {
         let now = self.to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
         // Probing can take a moment; other requests needn't wait for it.
         drop(guard);
-        Ok(self.with_probed_media(now).await)
+        let now = self.with_probed_media(now).await;
+        Ok(self.with_streams(now, client_id).await)
     }
 
     /// `POST /channels/{id}/progress`: saves the playback position. For a
@@ -230,7 +231,8 @@ impl App {
         }
         let now = self.to_now(&data, channel_id, &resolved, next.as_ref(), warnings)?;
         drop(guard);
-        Ok(self.with_probed_media(now).await)
+        let now = self.with_probed_media(now).await;
+        Ok(self.with_streams(now, client_id).await)
     }
 
     /// `GET /channels/{id}/plan`: what the channel will play, starting with
@@ -499,6 +501,7 @@ impl App {
                 Ok::<_, ApiError>(NextItem {
                     item: to_api_item(&next.item)?,
                     stream_url: paths::stream(&next.item.id),
+                    stream: None,
                     audio_url: audio_url(&next.item.id),
                 })
             })
@@ -510,6 +513,7 @@ impl App {
             item: to_api_item(&resolved.item)?,
             position_ms: to_u64(resolved.position_ms),
             stream_url: paths::stream(&resolved.item.id),
+            stream: None,
             audio_url: audio_url(&resolved.item.id),
             next,
             resolution_path: channel_refs(data, resolved),

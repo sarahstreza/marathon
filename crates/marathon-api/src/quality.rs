@@ -110,6 +110,28 @@ pub enum ProfileKind {
     Transcode,
 }
 
+/// How an item reaches a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamKind {
+    /// The original file, as `/stream` serves it.
+    Direct,
+    /// A live transcode, as an HLS playlist.
+    Transcode,
+}
+
+/// What a `stream_url` gives the client, for the info overlay: whether the
+/// original or a transcode, and at what quality.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct StreamInfo {
+    pub kind: StreamKind,
+    /// The transcoding profile, for [`StreamKind::Transcode`].
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// A line to show, e.g. `Original` or `Transcoding · 720p · 4 Mbps`.
+    pub summary: String,
+}
+
 /// A quality a client may choose, from `POST /playback/profiles`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ProfileOption {

@@ -2241,6 +2241,17 @@
           "item": {
             "$ref": "#/components/schemas/Item"
           },
+          "stream": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StreamInfo",
+                "description": "What `stream_url` gives, as in [`Now::stream`]."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "stream_url": {
             "type": "string"
           }
@@ -2304,9 +2315,20 @@
             },
             "description": "The channels `item` was resolved through (PLAN.md M11): this\nchannel first, then each nested child channel, ending with the one\n`item` belongs to. Just this channel for an ordinary channel."
           },
+          "stream": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StreamInfo",
+                "description": "What `stream_url` gives, for the info overlay: the original, or a\ntranscode at some quality. `None` from a server older than M13."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "stream_url": {
             "type": "string",
-            "description": "Where to stream `item` from."
+            "description": "Where to stream `item` from: the original file, or, for a client\nthat chose another quality (PLAN.md M13), a transcode's HLS\nplaylist. Either way a player opens it like any other URL, and\npositions are the item's own."
           },
           "warnings": {
             "type": "array",
@@ -2575,6 +2597,38 @@
             "minimum": 0
           }
         }
+      },
+      "StreamInfo": {
+        "type": "object",
+        "description": "What a `stream_url` gives the client, for the info overlay: whether the\noriginal or a transcode, and at what quality.",
+        "required": [
+          "kind",
+          "summary"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/StreamKind"
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transcoding profile, for [`StreamKind::Transcode`]."
+          },
+          "summary": {
+            "type": "string",
+            "description": "A line to show, e.g. `Original` or `Transcoding · 720p · 4 Mbps`."
+          }
+        }
+      },
+      "StreamKind": {
+        "type": "string",
+        "description": "How an item reaches a client.",
+        "enum": [
+          "direct",
+          "transcode"
+        ]
       },
       "Subtitle": {
         "type": "object",

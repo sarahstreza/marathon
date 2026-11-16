@@ -23,8 +23,8 @@ use marathon_api::{
     CLIENT_ID_HEADER, Capabilities, ChannelRef, ChannelSummary, ClientInfo, ClientPlaying,
     DEFAULT_CLIENT, Direction, ErrorBody, ErrorCode, Event, EventKind, Health, HistoryEntry, Item,
     NextItem, Now, PlannedItem, PlaybackSettings, PreviousRequest, ProfileKind, ProfileOption,
-    ProfilesRequest, ProgressReport, RelayedEvent, ScanReport, Subtitle, VersionInfo,
-    VideoCodecSupport,
+    ProfilesRequest, ProgressReport, RelayedEvent, ScanReport, StreamInfo, StreamKind, Subtitle,
+    VersionInfo, VideoCodecSupport,
 };
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
@@ -902,7 +902,7 @@ pub(crate) fn safe_join(root: &FsPath, rel: &str) -> Option<PathBuf> {
         AdvanceRequest, AdvanceReason, PreviousRequest, HistoryEntry, EventKind, ScanReport, ErrorBody,
         ErrorCode, Action, Direction, Event, RelayedEvent, ClientInfo, ClientPlaying,
         ActionAccepted, Capabilities, VideoCodecSupport, ProfilesRequest, ProfileKind,
-        ProfileOption, PlaybackSettings,
+        ProfileOption, PlaybackSettings, StreamInfo, StreamKind,
     )),
     modifiers(&BearerAuth),
     security((), ("bearer" = [])),

@@ -7,10 +7,6 @@
 //! (`720p`...). [`decide`] turns a profile into a [`Decision`] for one item.
 //! It is pure, so the policy is tested as a table without ffmpeg.
 
-// `decide` is called once `now` consults a client's profile, a later
-// commit, which removes this allow.
-#![allow(dead_code)]
-
 use marathon_api::{Capabilities, PROFILE_AUTO, PROFILE_ORIGINAL, ProfileKind, ProfileOption};
 
 use crate::config::TranscodeConfig;
@@ -46,7 +42,7 @@ impl Rung {
     }
 }
 
-fn rung_name(height: u32, video_kbps: u32) -> String {
+pub(crate) fn rung_name(height: u32, video_kbps: u32) -> String {
     if video_kbps >= 1000 && video_kbps.is_multiple_of(100) {
         format!("{height}p · {} Mbps", video_kbps / 1000)
     } else if video_kbps >= 1000 {

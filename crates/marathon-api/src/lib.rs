@@ -22,7 +22,7 @@ pub use control::{
 };
 pub use quality::{
     Capabilities, PROFILE_AUTO, PROFILE_ORIGINAL, PlaybackSettings, ProfileKind, ProfileOption,
-    ProfilesRequest, VideoCodecSupport,
+    ProfilesRequest, StreamInfo, StreamKind, VideoCodecSupport,
 };
 
 /// The client ID that `POST /clients/{id}/actions` resolves to the most
@@ -137,6 +137,9 @@ pub struct ChannelSummary {
 pub struct NextItem {
     pub item: Item,
     pub stream_url: String,
+    /// What `stream_url` gives, as in [`Now::stream`].
+    #[serde(default)]
+    pub stream: Option<StreamInfo>,
     /// Where to stream just `item`'s audio from, as in [`Now::audio_url`].
     #[serde(default)]
     pub audio_url: Option<String>,
@@ -155,8 +158,15 @@ pub struct Now {
     /// position; clients apply the resume rewind and the finished threshold
     /// (PLAN.md §1) themselves.
     pub position_ms: u64,
-    /// Where to stream `item` from.
+    /// Where to stream `item` from: the original file, or, for a client
+    /// that chose another quality (PLAN.md M13), a transcode's HLS
+    /// playlist. Either way a player opens it like any other URL, and
+    /// positions are the item's own.
     pub stream_url: String,
+    /// What `stream_url` gives, for the info overlay: the original, or a
+    /// transcode at some quality. `None` from a server older than M13.
+    #[serde(default)]
+    pub stream: Option<StreamInfo>,
     /// Where to stream just `item`'s audio from (PLAN.md M12): Ogg Opus,
     /// with no `Range` support; add `?start_ms=` to start partway in.
     /// `None` when the server has no audio streams (no ffmpeg, or turned
@@ -385,6 +395,11 @@ pub mod paths {
     /// `GET`: media bytes of an item.
     pub fn stream(item_id: &str) -> String {
         format!("{API_PREFIX}/stream/{item_id}")
+    }
+
+    /// `GET`: an HLS playlist of an item at a quality profile (PLAN.md M13).
+    pub fn transcode(item_id: &str, profile: &str) -> String {
+        format!("{API_PREFIX}/transcode/{item_id}/{profile}/index.m3u8")
     }
 
     /// `GET`: an item's audio only, as Ogg Opus (PLAN.md M12). Add

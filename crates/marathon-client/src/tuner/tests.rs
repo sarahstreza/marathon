@@ -98,11 +98,13 @@ impl FakeChannel {
             channel_number: self.number,
             channel_name: format!("Channel {}", self.number),
             stream_url: url(&item.id),
+            stream: None,
             audio_url: None,
             position_ms: self.position_ms,
             item,
             next: Some(NextItem {
                 stream_url: url(&next.id),
+                stream: None,
                 audio_url: None,
                 item: next,
             }),
