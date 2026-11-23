@@ -372,6 +372,7 @@ via `http-header-fields`).
 | GET | `/items/{id}` | Item metadata |
 | GET | `/stream/{item_id}` | Media bytes with `Range` support |
 | GET | `/audio/{item_id}?start_ms=` | M12: the item's audio only, transcoded to Opus in Ogg as it is sent, starting `start_ms` in. No `Range`; seek by requesting a new `start_ms`. `503 unavailable` when the server has no working ffmpeg. **Removed in M13** (replaced by the `audio` profile below) |
+| GET | `/thumbnail/{item_id}?at_ms=&width=` | One frame as a JPEG (default 480 px wide), made by ffmpeg on request, for clients not showing the video (audio-only mode, Android Auto). Offered exactly when audio streams are |
 | GET | `/transcode/{item_id}/{profile}/index.m3u8` | M13: HLS VOD playlist for the whole item. `503` when transcoding is off, `404` for an unknown item or profile |
 | GET | `/transcode/{item_id}/{profile}/{n}.ts?s=` | M13: segment `n` of a session, encoding it (or restarting the encoder there) if needed |
 | GET | `/bandwidth?bytes=N` | M13: N incompressible bytes, `no-store`, for a client's throughput test |

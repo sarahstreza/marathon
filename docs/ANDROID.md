@@ -235,6 +235,7 @@ unmapped, and keys Marathon doesn't use (volume, Home) go to the system.
 | Swipe up / down | `ChannelUp` / `ChannelDown`, unless it starts in the system's gesture strip at the top or bottom edge (going home, recent apps, notifications) |
 | Double-tap right / left third | `SeekRelative(+10)` / `SeekRelative(-10)` |
 | Double-tap the middle | `TogglePause` |
+| Drag along the banner's progress bar | Scrubs: `SeekRelative` to where the finger lifts (see "Seeking") |
 | Single tap | `ShowInfo`, and reveals a control strip for 4 s |
 | Control strip | Guide, previous item, pause/play, next item, subtitles, sleep timer, server settings |
 | System back | Clears a half-typed channel number, then `Back` (closes the guide or banner), then leaves the app |
@@ -246,6 +247,31 @@ default from Android 16), so `MainActivity` handles it with an
 Together with the remote API, this covers every §9 action that means anything on
 Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
 `Quit` saves progress and finishes the activity.
+
+### Seeking
+
+Every seek, from any input (double tap, keys, the remote API, a scrub),
+shows the banner at once, with its progress bar and time already at the
+seek's target. Over the network mpv can take a moment to get there, so
+until playback reaches the target (`PendingSeek`, unit tested),
+`MpvPlayer.positionMs()` reports the target, and a second quick seek
+starts from it. `MpvPlayer` turns `SeekRelative` into an absolute mpv seek
+to that target, so what the bar shows and where mpv lands agree. Targets
+stay inside the item, short of its last second, as audio streams already
+did; a seek that never lands stops standing in after 10 s.
+
+While the banner shows, a drag that starts on (or within 24 dp of) its
+progress bar scrubs (`Scrub`, unit tested). Dragging the bar's full width
+crosses the whole item. Sliding the finger up off the bar makes the same
+drag move less, for fine positioning: half speed from 48 dp above the bar,
+a quarter from 96 dp, an eighth from 144 dp, and the time says which. Moves
+are relative, so changing speed never makes the target jump. While dragging,
+the bar thickens and shows the target, and the banner stays up; the seek is
+sent once, when the finger lifts (in audio-only mode each seek reopens the
+stream, so seeking as the finger moves would be costly). Because a scrub
+claims the drag from where it starts, moving up during it never changes
+channel. On touch screens the banner sits above the system's bottom gesture
+strip, so the bar can be reached without going home instead.
 
 ### Manifest
 
@@ -259,6 +285,9 @@ Android. `ToggleFullscreen` is ignored (the app is always fullscreen).
   `POST_NOTIFICATIONS`, for listening in the background (see "Audio only").
   The notification permission is requested the first time audio only is
   turned on; without it, playback works but shows no notification.
+- `PlaybackService` is exported with a `MediaBrowserService` intent
+  filter, and `MainActivity` takes `MEDIA_PLAY_FROM_SEARCH`, for Android
+  Auto and voice search (see "Android Auto").
 
 ### Sleep timer
 
@@ -316,6 +345,55 @@ screen off. The choice is saved (`Settings.audioOnly`).
   `SessionHolder` (a process-wide object), not the activity: the activity
   creates and shows the session, and the service keeps the process alive.
   The session is closed when neither needs it.
+- **Seek bar and artwork.** The media session publishes the item's
+  duration and position, so the lock screen (Android 13+) and cars show a
+  seek bar; a scrub becomes `SeekRelative` from where playback is. While
+  listening in the background, the artwork is a thumbnail of what's
+  playing (`GET /thumbnail/{id}?at_ms=&width=480`), fetched when an item
+  starts and every 30 s while it plays on (`ThumbnailSchedule`), not
+  while paused. A server without ffmpeg makes none: the artwork stays
+  empty.
+
+### Android Auto
+
+`PlaybackService` is also a `MediaBrowserService`, and the manifest
+marks Marathon as an Auto media app (`res/xml/automotive_app_desc.xml`).
+It needs no extra library: the framework's `MediaSession` and
+`MediaBrowserService` are what Auto speaks.
+
+- **Browsing.** Only Android Auto and Android Automotive's media app
+  (`CarMedia.CAR_BROWSERS`) get a browse root; anything else (System UI's
+  media resumption, other apps) gets none. The root has one tab,
+  *Channels*: every channel as the guide lists it, with what it's on.
+  Picking one sends `GoToChannelId` and `Play`. With no server set up,
+  the car shows "Open Marathon to choose a server."
+- **Audio only.** When a car connects (it asks for the browse root), a
+  session playing video switches to audio only. That isn't saved, so the
+  app opens as before next time. If the app has no session (it was never
+  opened, or was closed), playing from the car starts one from the saved
+  server, in audio-only mode, without an activity
+  (`SessionHolder.startForCar`). Either way it listens in the background
+  as above; Android lets a media session's command start a foreground
+  service from the background.
+- **Controls.** While a car is connected, the skip buttons are
+  `NextItem` / `PreviousItem` (switching videos) and channel down/up are
+  custom actions beside them. Elsewhere (lock screen, headsets) skip
+  stays channel down/up, as before. Scrubbing works as on the lock
+  screen. Voice search ("play The Office on Marathon") matches a channel
+  by number, then name, then part of a name (`CarMedia.searchChannel`);
+  `MainActivity` handles the same search intent on the phone.
+- **Disconnecting.** When the car unbinds, the controls go back to the
+  phone's layout. Playback carries on in the background, as if you'd
+  left the app in audio-only mode.
+
+The notification's buttons go through a broadcast receiver only
+Marathon can send to, because the service itself is exported for cars.
+
+**Testing without a car.** Auto only lists apps from the Play Store
+unless you turn on *Unknown sources* in Android Auto's developer
+settings (tap its version number ten times to reveal them). The Desktop
+Head Unit (DHU, in the SDK's *Android Auto Desktop Head Unit Emulator*
+package) shows Auto on a computer over `adb forward tcp:5277 tcp:5277`.
 
 ### Widgets
 
@@ -389,9 +467,59 @@ A job named `android` in `.github/workflows/ci.yml` runs on ubuntu-latest:
 
 1. `scripts/check-tuner-parity.sh`.
 2. Temurin 25 and `gradle/actions/setup-gradle`.
-3. `./gradlew check :app:assembleDebug`, which covers `:core` tests, `:api`
+3. Decodes the signing key, if the repository has one (see "Signing").
+4. `./gradlew check :app:assembleDebug`, which covers `:core` tests, `:api`
    generation, and app unit tests and lint.
-4. Uploads `app-debug.apk` as a build artifact.
+5. Uploads `app-debug.apk` as a build artifact.
+
+## Signing
+
+Android only installs a build over an existing install if both are signed
+with the same key. Gradle signs debug builds with a per-machine debug key
+(`~/.android/debug.keystore`), and every CI run makes a new one, so each
+new build had to be uninstalled and reinstalled, losing the server
+settings. So Marathon has a key of its own, kept out of this public
+repository (anyone holding it can sign a build that installs over yours).
+When it is configured, `app/build.gradle.kts` signs debug builds with it;
+when it isn't, builds get the machine's debug key as before. Giving only
+one of the two settings stops the build with an error.
+
+| Setting | Gradle property | Environment (CI) |
+|---|---|---|
+| Keystore (PKCS12) | `marathon.signing.storeFile` | `MARATHON_SIGNING_STORE_FILE` |
+| Its password | `marathon.signing.storePassword` | `MARATHON_SIGNING_STORE_PASSWORD` |
+| Key alias (default `marathon`) | `marathon.signing.keyAlias` | `MARATHON_SIGNING_KEY_ALIAS` |
+| Key password (default: the store's) | `marathon.signing.keyPassword` | `MARATHON_SIGNING_KEY_PASSWORD` |
+
+**Making the key** (once; back it up, since losing it means one more
+uninstall):
+
+```sh
+keytool -genkeypair -storetype PKCS12 -keystore ~/.android/marathon-signing.p12 \
+  -alias marathon -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=Marathon"
+```
+
+**Building with it locally:** in `~/.gradle/gradle.properties` (not the
+project's), readable only by you:
+
+```properties
+marathon.signing.storeFile=/home/you/.android/marathon-signing.p12
+marathon.signing.storePassword=...
+```
+
+**In CI:** add two repository secrets: `MARATHON_SIGNING_KEYSTORE`, the
+keystore in base64 (`base64 -w0 ~/.android/marathon-signing.p12`), and
+`MARATHON_SIGNING_PASSWORD`. The `android` job decodes the keystore into
+the runner's temporary directory, but only for pushes and for pull requests
+from this repository's own branches. A pull request from a fork runs its
+author's code, so it never gets the key: GitHub withholds secrets from fork
+pull requests on the `pull_request` trigger, and the step's own check keeps
+it that way should the trigger change (never move this job to
+`pull_request_target`).
+
+**Checking an APK's key:** `apksigner verify --print-certs app-debug.apk`
+should print `CN=Marathon`. The first install signed with this key still
+needs the old app uninstalled; after that, builds install over each other.
 
 The Rust `check` job also checks that `android/api/openapi.json` matches
 `marathond --print-openapi`, because it already has the Rust toolchain and libmpv.
@@ -415,7 +543,15 @@ These need a person and a device. They are restated here with steps:
    `adb install android/app/build/outputs/apk/debug/app-debug.apk`. Enter the
    server URL and token.
 2. **Phone, touch:** swipe up and down to change channel, double-tap to seek,
-   tap for info and the controls, use the guide. Check that every action in §9 that
+   tap for info and the controls, use the guide. Double-tap to seek: the
+   banner appears with the bar and time already moved, before the picture
+   catches up; double-tap three times quickly and it moves 30 s. Tap, then
+   drag along the progress bar: the bar thickens and the time follows the
+   finger, and lifting seeks there. Mid-drag, slide up: the time reads
+   "Half speed", then "Quarter speed", then "Fine", and the same sideways
+   movement moves less; sliding up never changes channel. With gesture
+   navigation, the bar sits clear of the bottom edge, and dragging it
+   never goes home. Check that every action in §9 that
    applies on a phone is reachable.
    With the phone held upright, the Watch screen turns to landscape (either
    way up), and Setup (the controls' Server button) follows the phone again.

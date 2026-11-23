@@ -26,8 +26,8 @@ import marathon.core.TunerConfig
 import marathon.core.TunerLoop
 import marathon.core.overlay.OverlayModel
 
-/** What's on, for the media notification and lock screen. */
-data class NowPlaying(val channelNumber: Int, val channelName: String, val title: String)
+/** What's on, for the media notification, lock screen, and Android Auto. */
+data class NowPlaying(val channelNumber: Int, val channelName: String, val itemId: String, val title: String)
 
 class Session(context: Context, server: ServerSettings, clientId: String, onQuit: () -> Unit) {
     val api = HttpApi(server.url, server.token, clientId)
@@ -68,7 +68,7 @@ class Session(context: Context, server: ServerSettings, clientId: String, onQuit
                     is Event.Error -> toast(event.message)
                     is Event.ChannelChanged -> channelName = event.channelName
                     is Event.NowPlaying ->
-                        nowPlayingState.value = NowPlaying(event.channelNumber, channelName, event.title)
+                        nowPlayingState.value = NowPlaying(event.channelNumber, channelName, event.itemId, event.title)
                     else -> {}
                 }
             },
@@ -89,6 +89,10 @@ class Session(context: Context, server: ServerSettings, clientId: String, onQuit
     /** Sends [action] from the input called [source]. Any thread. */
     fun send(action: Action, source: String) {
         loop.send(action, source)
+        // Every seek, from any input, shows the banner, whose progress bar
+        // and time jump straight to where it lands (MpvPlayer.seekTarget).
+        // Queued behind the seek, so the banner already shows its target.
+        if (action is Action.SeekRelative) loop.send(Action.ShowInfo, source)
     }
 
     /** Reports progress and stops everything. Blocks briefly. */

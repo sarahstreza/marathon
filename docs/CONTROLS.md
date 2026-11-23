@@ -254,6 +254,7 @@ work as in the tables above.
 | Change channel | Swipe up / down |
 | Skip back or forward 10 seconds | Double-tap the left / right third of the screen |
 | Pause or resume | Double-tap the middle |
+| Jump to a point in the episode | Tap to show the progress bar, then drag along it; slide your finger up while dragging for finer control |
 | See what's on, and show the buttons | Tap once |
 | Guide, previous / next episode, pause, subtitles, audio only, change server | The buttons along the top |
 | Close the guide or hide the banner | Back |

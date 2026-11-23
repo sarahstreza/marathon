@@ -65,6 +65,8 @@ pub(crate) struct Audio {
     pub(crate) bitrate_kbps: u32,
     /// One permit per ffmpeg process allowed to run at once.
     pub(crate) streams: Arc<Semaphore>,
+    /// One permit per thumbnail being made at once ([`crate::thumbnail`]).
+    pub(crate) thumbnails: Semaphore,
 }
 
 impl Audio {
@@ -109,6 +111,7 @@ impl Audio {
             streams: Arc::new(Semaphore::new(
                 usize::try_from(config.max_streams).unwrap_or(usize::MAX),
             )),
+            thumbnails: Semaphore::new(crate::thumbnail::MAX_RUNNING),
         })
     }
 }

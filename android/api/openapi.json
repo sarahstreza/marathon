@@ -1039,6 +1039,96 @@
         }
       }
     },
+    "/api/v1/thumbnail/{item_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "description": "One frame of the item as a JPEG, made by ffmpeg on request, for clients that aren't showing the video (audio-only mode, a car's screen). Offered exactly when audio streams are: when `now` gives an `audio_url`.",
+        "operationId": "thumbnail",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "description": "Item ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at_ms",
+            "in": "query",
+            "description": "The frame's time, in milliseconds (default 0)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "width",
+            "in": "query",
+            "description": "Width in pixels, 32 to 1280 (default 480); the height follows the video's aspect ratio",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The frame",
+            "content": {
+              "image/jpeg": {}
+            }
+          },
+          "400": {
+            "description": "Malformed query, or a width out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item, or its file is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ffmpeg made no picture (the item has no video, `at_ms` is past its end, or its source failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server has no ffmpeg, or is busy making other thumbnails",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/transcode/{item_id}/{profile}/index.m3u8": {
       "get": {
         "tags": [

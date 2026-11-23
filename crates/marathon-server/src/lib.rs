@@ -41,6 +41,7 @@ pub mod scan;
 mod session;
 pub mod sources;
 mod streams;
+mod thumbnail;
 mod transcode;
 
 use std::future::{Future, IntoFuture};

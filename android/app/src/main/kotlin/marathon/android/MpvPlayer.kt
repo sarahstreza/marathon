@@ -59,6 +59,7 @@ import marathon.core.Player
 import marathon.core.PlayerError
 import marathon.core.PlayerEvent
 import marathon.core.SubtitleTrack
+import marathon.core.SystemClock
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -126,6 +127,14 @@ class MpvPlayer(
 
     /** Whether audio-only mode is on, as it changes (whether or not the current item has an audio stream). */
     val audioOnly: StateFlow<Boolean> = audioOnlyState
+
+    /** A seek on its way, which [positionMs] reports as the position until it lands. */
+    private val pendingSeek = PendingSeek(SystemClock::nowMs)
+
+    private val seekTargetState = MutableStateFlow<Long?>(null)
+
+    /** Where the latest seek is going, when it was asked for (so the progress bar can jump there at once). */
+    val seekTarget: StateFlow<Long?> = seekTargetState
 
     init {
         for ((name, value) in OPTIONS) mpv.setOptionString(name, value)
@@ -210,6 +219,7 @@ class MpvPlayer(
     override fun load(request: LoadRequest) {
         synchronized(opening) {
             synchronized(lock) { reconnectedAtMs = null }
+            clearSeek()
             open(request, request.startMs, unpause = true)
         }
     }
@@ -263,6 +273,7 @@ class MpvPlayer(
                 request = null
                 playingAudio = false
             }
+            clearSeek()
             mpv.command(arrayOf("stop"))
         }
     }
@@ -274,27 +285,51 @@ class MpvPlayer(
 
     override fun isPaused(): Boolean = pausedState.value
 
+    /**
+     * Seeks to an absolute target worked out here, from the pending seek's
+     * target if one is on its way, so the position shown, a quick second
+     * seek, and where mpv ends up all agree.
+     */
     override fun seekRelative(seconds: Int) {
         synchronized(opening) {
-            val current = synchronized(lock) { request.takeIf { playingAudio && latestUrl != null } }
-            if (current == null) {
-                mpv.command(arrayOf("seek", seconds.toString(), "relative"))
+            val (audio, current) = synchronized(lock) { playingAudio to request.takeIf { latestUrl != null } }
+            val from = positionMs() ?: if (audio) synchronized(lock) { offsetMs } else return
+            val target = PendingSeek.target(from, seconds, durationMs())
+            pendingSeek.start(target)
+            seekTargetState.value = target
+            if (!audio || current == null) {
+                try {
+                    mpv.command(arrayOf("seek", String.format(Locale.ROOT, "%.3f", target / 1000.0), "absolute"))
+                } catch (e: RuntimeException) {
+                    // Fails harmlessly when nothing is loaded yet.
+                    Log.debug("cannot seek: ${e.message}")
+                    clearSeek()
+                }
                 return
             }
             // An audio stream can't seek: reopen it at the new position.
-            val target = AudioStream.seekTarget(positionMs() ?: offsetMs, seconds, current.durationMs)
             try {
                 open(current, target, unpause = false)
             } catch (e: PlayerError) {
                 Log.warn("cannot seek the audio stream: $e")
+                clearSeek()
             }
         }
     }
 
-    override fun positionMs(): Long? {
+    /** The position, or where a seek on its way will land. */
+    override fun positionMs(): Long? = pendingSeek.targetMs() ?: playedMs()
+
+    /** Where playback actually is, in the item. */
+    private fun playedMs(): Long? {
         val (audio, offset) = synchronized(lock) { playingAudio to offsetMs }
         if (audio) return AudioStream.positionMs(offset, timePos)
         return timePos?.takeIf { it.isFinite() && it >= 0 }?.let { Math.round(it * 1000) }
+    }
+
+    private fun clearSeek() {
+        pendingSeek.clear()
+        seekTargetState.value = null
     }
 
     override fun durationMs(): Long? {
@@ -343,7 +378,10 @@ class MpvPlayer(
 
     override fun eventProperty(property: String, value: Double) {
         when (property) {
-            "time-pos" -> timePos = value
+            "time-pos" -> {
+                timePos = value
+                if (playedMs()?.let(pendingSeek::reached) == true) seekTargetState.value = null
+            }
             "duration" -> duration = value
             "video-params/aspect" -> aspectState.value = value.takeIf { it.isFinite() && it > 0 }
         }
@@ -394,7 +432,7 @@ class MpvPlayer(
     private fun streamDropped(): Boolean {
         val (audio, duration) = synchronized(lock) { playingAudio to request?.durationMs }
         if (!audio || duration == null) return false
-        val at = positionMs() ?: return false
+        val at = playedMs() ?: return false
         if (duration - at <= EARLY_END_MS) return false
         return reconnect("the audio stream ended ${duration - at}ms early")
     }
@@ -405,7 +443,7 @@ class MpvPlayer(
      * since. Returns whether it did (and the failure is handled).
      */
     private fun reconnect(why: String): Boolean {
-        val at = positionMs() ?: return false
+        val at = playedMs() ?: return false
         val current = synchronized(lock) {
             val again = reconnectedAtMs
             if (!playingAudio || (again != null && at - again < RECONNECT_AGAIN_MS)) return false
